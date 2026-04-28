@@ -1,6 +1,6 @@
 # Care AI Vision
 
-A [Care](https://github.com/ohcnetwork/care_fe) microfrontend plugin that uses **Google Gemini Vision** to extract patient registration details from scanned/photographed forms via OCR.
+AI-powered [CARE](https://github.com/ohcnetwork/care_fe) App (plugin) to extract and auto-fill patient registration details from scanned or photographed forms.
 
 ## Features
 
