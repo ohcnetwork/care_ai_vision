@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   Loader2,
   RotateCcw,
-  X,
 } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
@@ -66,6 +65,7 @@ export default function OCRFormFill({
     { label: string; value: string }[]
   >([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastFileRef = useRef<File | null>(null);
 
   const setField = useCallback(
     (field: string, value: string | number | boolean) => {
@@ -168,6 +168,7 @@ export default function OCRFormFill({
 
   const processImage = useCallback(
     async (file: File) => {
+      lastFileRef.current = file;
       setStatus("processing");
       setError("");
       setFilledFields([]);
@@ -246,26 +247,15 @@ export default function OCRFormFill({
 
       {/* Bottom sheet / modal overlay */}
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* Backdrop */}
           <div
-            className="absolute inset-0 bg-black/40"
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
             onClick={status !== "processing" ? reset : undefined}
           />
           {/* Sheet */}
-          <Card className="relative w-full max-w-md rounded-t-2xl sm:rounded-2xl border-0 shadow-xl animate-in slide-in-from-bottom">
+          <Card className="relative w-full max-w-md rounded-2xl border-0 shadow-2xl animate-in fade-in zoom-in-95">
             {/* Close button */}
-            {status !== "processing" && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={reset}
-                className="absolute top-3 right-3 h-8 w-8 rounded-full text-gray-400 hover:text-gray-600"
-              >
-                <X className="h-5 w-5" />
-              </Button>
-            )}
 
             {status === "processing" && (
               <CardContent className="flex flex-col items-center gap-4 py-8">
@@ -311,7 +301,7 @@ export default function OCRFormFill({
                         <span className="text-xs font-medium text-gray-500 shrink-0">
                           {f.label}
                         </span>
-                        <span className="text-sm font-medium text-gray-900 text-right truncate">
+                        <span className="text-sm font-medium text-gray-900 text-right wrap-break-word">
                           {f.value}
                         </span>
                       </div>
@@ -356,8 +346,12 @@ export default function OCRFormFill({
                     type="button"
                     className="w-full gap-1.5"
                     onClick={() => {
-                      reset();
-                      fileInputRef.current?.click();
+                      if (lastFileRef.current) {
+                        processImage(lastFileRef.current);
+                      } else {
+                        reset();
+                        fileInputRef.current?.click();
+                      }
                     }}
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
