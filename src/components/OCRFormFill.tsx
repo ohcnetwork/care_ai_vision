@@ -19,70 +19,16 @@ import {
 } from "@/components/ui/card";
 
 import { useTranslation } from "@/hooks/useTranslation";
-
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
-
-const BLOOD_GROUP_MAP: Record<string, string> = {
-  "A+": "A_POSITIVE",
-  "A-": "A_NEGATIVE",
-  "B+": "B_POSITIVE",
-  "B-": "B_NEGATIVE",
-  "AB+": "AB_POSITIVE",
-  "AB-": "AB_NEGATIVE",
-  "O+": "O_POSITIVE",
-  "O-": "O_NEGATIVE",
-};
-
-interface ExtractedData {
-  name?: string;
-  phone_number?: string;
-  emergency_phone_number?: string;
-  gender?: string;
-  date_of_birth?: string;
-  age?: number;
-  blood_group?: string;
-  address?: string;
-  permanent_address?: string;
-  pincode?: number;
-}
+import {
+  BLOOD_GROUP_MAP,
+  ExtractedData,
+  extractDataFromImage,
+  fileToBase64,
+  normalizePhone,
+  resolveGeoOrganization,
+} from "@/lib/ocr";
 
 type Status = "idle" | "processing" | "success" | "error";
-
-const EXTRACTION_PROMPT = `You are an OCR data extraction assistant. Analyze this image of a patient registration form and extract the following fields. Return ONLY a valid JSON object with these keys (omit keys if the value is not found):
-
-- name: patient full name (string)
-- phone_number: phone number with country code, e.g. "+911234567890" (string)
-- emergency_phone_number: emergency contact phone with country code (string)
-- gender: one of "male", "female", "transgender", "non_binary" (string, lowercase)
-- date_of_birth: date of birth in "YYYY-MM-DD" format (string) — extract this if a full date is visible
-- age: age in years (number) — extract this if only age is written, not a full date
-- blood_group: blood group like "A+", "B-", "O+", "AB+" etc. (string)
-- address: current address (string)
-- permanent_address: permanent address (string)
-- pincode: PIN/ZIP code (number)
-
-Return ONLY the JSON object, no markdown, no explanation.`;
-
-function normalizePhone(phone?: string): string | undefined {
-  if (!phone) return undefined;
-  const digits = phone.replace(/[^+\d]/g, "");
-  if (digits.startsWith("+")) return digits;
-  if (digits.length === 10) return `+91${digits}`;
-  return `+91${digits}`;
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
 
 interface FormLike {
   setValue: (
@@ -129,7 +75,7 @@ export default function OCRFormFill({
   );
 
   const applyData = useCallback(
-    (data: ExtractedData) => {
+    async (data: ExtractedData) => {
       const filled: { label: string; value: string }[] = [];
 
       if (data.name) {
@@ -198,6 +144,23 @@ export default function OCRFormFill({
         filled.push({ label: "Pincode", value: String(data.pincode) });
       }
 
+      // Resolve governance hierarchy (state → district → local body → ward)
+      if (data.state || data.district || data.local_body || data.ward) {
+        try {
+          const geoResult = await resolveGeoOrganization(data);
+          if (geoResult) {
+            setField("geo_organization", geoResult.id);
+            setField("_selected_levels", geoResult.levels as unknown as string);
+            const locationParts = geoResult.levels
+              .map((l) => l.name)
+              .join(" → ");
+            filled.push({ label: "Governance", value: locationParts });
+          }
+        } catch {
+          // Governance resolution failed silently — user can select manually
+        }
+      }
+
       setFilledFields(filled);
     },
     [setField],
@@ -213,50 +176,12 @@ export default function OCRFormFill({
       try {
         const base64 = await fileToBase64(file);
         const mimeType = file.type || "image/jpeg";
-
-        const body = JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: EXTRACTION_PROMPT },
-                { inline_data: { mime_type: mimeType, data: base64 } },
-              ],
-            },
-          ],
-          generationConfig: { temperature: 0.1 },
-        });
-
-        const MAX_RETRIES = 3;
-        let res: Response | undefined;
-        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-          res = await fetch(GEMINI_URL, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-goog-api-key": GEMINI_API_KEY,
-            },
-            body,
-          });
-          if (res.status !== 429 || attempt === MAX_RETRIES) break;
-          // Exponential backoff: 2s, 4s, 8s
-          await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
-        }
-
-        if (!res || !res.ok) {
-          throw new Error(`Gemini API error: ${res?.status ?? "unknown"}`);
-        }
-
-        const json = await res.json();
-        const text: string =
-          json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-
-        const cleaned = text
-          .replace(/```json\s*/g, "")
-          .replace(/```\s*/g, "")
-          .trim();
-        const data: ExtractedData = JSON.parse(cleaned);
-
-        applyData(data);
+        const data = await extractDataFromImage(
+          base64,
+          mimeType,
+          GEMINI_API_KEY,
+        );
+        await applyData(data);
         setStatus("success");
       } catch (e: unknown) {
         const message =
@@ -393,9 +318,18 @@ export default function OCRFormFill({
                     ))}
                   </div>
                 </CardContent>
-                <CardFooter>
+                <CardFooter className="flex flex-col gap-2">
                   <Button
                     type="button"
+                    className="w-full gap-1.5"
+                    onClick={reset}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    {t("done")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
                     className="w-full gap-1.5"
                     onClick={() => {
                       reset();
