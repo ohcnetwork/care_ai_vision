@@ -1,6 +1,6 @@
 # Care AI Vision
 
-A [CARE](https://github.com/ohcnetwork/care_fe) App (plugin) that leverages OCR to capture patient registration details from scanned or photographed forms and automatically populate the details in CARE registration.
+AI-powered [CARE](https://github.com/ohcnetwork/care_fe) App (plugin) to extract and auto-fill patient registration details from scanned or photographed forms.
 
 ## Features
 
