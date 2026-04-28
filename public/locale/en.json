@@ -1,0 +1,12 @@
+{
+  "scan_registration_form": "Scan Registration Form",
+  "scan_form_description": "Upload or photograph a filled paper registration form to auto-fill patient details.",
+  "drag_drop_or_click": "Drag & drop an image, or click to upload",
+  "supported_formats": "Supports JPG, PNG, HEIC",
+  "extracting_details": "Extracting patient details…",
+  "extracted_fields": "Extracted {{count}} field(s)",
+  "scan_another_form": "Scan another form",
+  "try_again": "Try again",
+  "upload_image_error": "Please upload an image file",
+  "fields": "fields"
+}
