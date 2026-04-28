@@ -1,7 +1,7 @@
 import { lazy } from "react";
 
 const manifest = {
-  plugin: "care-ocr-fill",
+  plugin: "care_ai_vision_fe",
   routes: {},
   extends: [],
   components: {
