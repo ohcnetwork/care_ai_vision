@@ -9,6 +9,9 @@ const manifest = {
   extends: [],
   components: {
     PatientRegistrationForm: lazy(() => import("./components/OCRFormFill")),
+    DiagnosticReportOverride: lazy(
+      () => import("./components/DiagnosticReportOCR"),
+    ),
   },
   userNavItems: [
     {
