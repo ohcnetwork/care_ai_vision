@@ -187,12 +187,26 @@ async function extractLabResults(
 
 export default function DiagnosticReportOCR({
   observationDefinitions,
-  onExtracted,
+  handleComponentValueChange,
+  handleValueChange,
+  handleUnitChange,
   disabled,
   __meta,
 }: {
   observationDefinitions: ObservationDefinition[];
-  onExtracted: (results: ExtractedResult[]) => void;
+  handleComponentValueChange: (
+    definitionId: string,
+    index: number,
+    componentCode: string,
+    value: string,
+    unit: string,
+  ) => void;
+  handleValueChange: (
+    definitionId: string,
+    index: number,
+    value: string,
+  ) => void;
+  handleUnitChange: (definitionId: string, index: number, unit: string) => void;
   disabled?: boolean;
   __meta?: {
     config?: {
@@ -201,6 +215,39 @@ export default function DiagnosticReportOCR({
     [key: string]: unknown;
   };
 }) {
+  const onExtracted = useCallback(
+    (
+      results: {
+        definitionId: string;
+        values: {
+          value: string;
+          unit?: string;
+          componentCode?: string;
+        }[];
+      }[],
+    ) => {
+      for (const result of results) {
+        for (const val of result.values) {
+          if (val.componentCode) {
+            handleComponentValueChange(
+              result.definitionId,
+              0,
+              val.componentCode,
+              val.value,
+              val.unit || "",
+            );
+          } else {
+            handleValueChange(result.definitionId, 0, val.value);
+            if (val.unit) {
+              handleUnitChange(result.definitionId, 0, val.unit);
+            }
+          }
+        }
+      }
+    },
+    [handleComponentValueChange, handleValueChange, handleUnitChange],
+  );
+
   const { t } = useTranslation();
   const user = useAuthUser();
   const enabledAtom = useMemo(
