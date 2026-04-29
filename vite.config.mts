@@ -11,7 +11,7 @@ export default defineConfig({
       name: "care_ai_vision_fe",
       filename: "remoteEntry.js",
       exposes: {
-        "./manifest": "./src/manifest.ts",
+        "./manifest": "./src/manifest.tsx",
       },
       shared: [
         "react",

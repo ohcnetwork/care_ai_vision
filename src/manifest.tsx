@@ -1,12 +1,22 @@
+import { FileScan } from "lucide-react";
 import { lazy } from "react";
+
+import routes from "./routes";
 
 const manifest = {
   plugin: "care_ai_vision_fe",
-  routes: {},
+  routes,
   extends: [],
   components: {
     PatientRegistrationForm: lazy(() => import("./components/OCRFormFill")),
   },
+  userNavItems: [
+    {
+      url: "ai-vision",
+      name: "AI Vision",
+      icon: <FileScan />,
+    },
+  ],
   devices: [],
 } as const;
 

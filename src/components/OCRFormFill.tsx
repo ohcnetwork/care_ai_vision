@@ -5,7 +5,8 @@ import {
   Loader2,
   RotateCcw,
 } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useAtomValue } from "jotai";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
+import useAuthUser from "@/hooks/useAuthUser";
 import { useTranslation } from "@/hooks/useTranslation";
 import {
   BLOOD_GROUP_MAP,
@@ -26,6 +28,7 @@ import {
   normalizePhone,
   resolveGeoOrganization,
 } from "@/lib/ocr";
+import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
 
 type Status = "idle" | "processing" | "success" | "error";
 
@@ -54,6 +57,12 @@ export default function OCRFormFill({
   };
 }) {
   const { t } = useTranslation();
+  const user = useAuthUser();
+  const enabledAtom = useMemo(
+    () => aiVisionEnabledAtomFor(user.id ?? user.username),
+    [user.id, user.username],
+  );
+  const enabled = useAtomValue(enabledAtom);
   const GEMINI_API_KEY =
     __meta?.config?.REACT_APP_GEMINI_API_KEY ??
     import.meta.env.REACT_APP_GEMINI_API_KEY ??
@@ -219,6 +228,10 @@ export default function OCRFormFill({
   if (patientId) return null;
 
   const isOpen = status !== "idle";
+
+  if (!enabled) {
+    return null;
+  }
 
   return (
     <>

@@ -9,5 +9,12 @@
   "try_again": "Try again",
   "upload_image_error": "Please upload an image file",
   "fields": "fields",
-  "done": "Done"
+  "done": "Done",
+  "ai_vision_settings": "AI Vision Settings",
+  "ai_vision_settings_description": "Enable or disable the AI-powered OCR form filling feature for your account.",
+  "ocr_form_fill": "OCR Form Fill",
+  "plugin_enabled": "The AI Vision plugin is currently enabled.",
+  "plugin_disabled": "The AI Vision plugin is currently disabled.",
+  "enable": "Enable",
+  "disable": "Disable"
 }
