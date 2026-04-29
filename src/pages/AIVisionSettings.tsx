@@ -1,6 +1,6 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useAtom } from "jotai";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -14,7 +14,12 @@ import { Switch } from "@/components/ui/switch";
 
 import useAuthUser from "@/hooks/useAuthUser";
 import { useTranslation } from "@/hooks/useTranslation";
-import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
+import {
+  aiVisionEnabledAtomFor,
+  fetchAiVisionPreference,
+  preferencesSyncedAtom,
+  setAiVisionPreference,
+} from "@/state/ai-vision-store";
 
 export default function AIVisionSettings() {
   const { t } = useTranslation();
@@ -24,6 +29,24 @@ export default function AIVisionSettings() {
     [user.id, user.username],
   );
   const [enabled, setEnabled] = useAtom(enabledAtom);
+  const [synced, setSynced] = useAtom(preferencesSyncedAtom);
+
+  // On mount, sync from server once per session
+  useEffect(() => {
+    if (synced) return;
+    fetchAiVisionPreference().then((serverValue) => {
+      setEnabled(serverValue);
+      setSynced(true);
+    });
+  }, [synced, setEnabled, setSynced]);
+
+  const handleToggle = useCallback(
+    (checked: boolean) => {
+      setEnabled(checked);
+      setAiVisionPreference(checked);
+    },
+    [setEnabled],
+  );
 
   return (
     <div className="container mx-auto max-w-2xl py-8 px-4">
@@ -56,10 +79,7 @@ export default function AIVisionSettings() {
           <div className="text-sm text-muted-foreground">
             {enabled ? t("plugin_enabled") : t("plugin_disabled")}
           </div>
-          <Switch
-            checked={enabled}
-            onCheckedChange={(checked) => setEnabled(checked)}
-          />
+          <Switch checked={enabled} onCheckedChange={handleToggle} />
         </CardContent>
       </Card>
     </div>
