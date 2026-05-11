@@ -1,4 +1,8 @@
-export { extractDataFromImage } from "./gemini";
+export {
+  extractDataFromImage,
+  extractLabResults,
+  buildLabResultsPrompt,
+} from "./care-ai";
 export { resolveGeoOrganization } from "./governance";
-export { BLOOD_GROUP_MAP, normalizePhone, fileToBase64 } from "./utils";
+export { BLOOD_GROUP_MAP, normalizePhone } from "./utils";
 export type { ExtractedData, GovtOrg } from "./types";
