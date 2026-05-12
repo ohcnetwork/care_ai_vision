@@ -13,11 +13,8 @@ import { Button } from "@/components/ui/button";
 
 import useAuthUser from "@/hooks/useAuthUser";
 import { useTranslation } from "@/hooks/useTranslation";
-import { fileToBase64 } from "@/lib/ocr";
+import { extractLabResults, buildLabResultsPrompt } from "@/lib/ocr";
 import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
-
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 
 type Status = "idle" | "processing" | "success" | "error";
 
@@ -48,37 +45,6 @@ interface LabResult {
   value: string;
   unit?: string;
   components?: { name: string; value: string; unit?: string }[];
-}
-
-function buildPrompt(definitions: ObservationDefinition[]): string {
-  const testList = definitions
-    .map((d) => {
-      const name = d.title || d.code?.display || d.code?.code;
-      if (d.component?.length) {
-        const comps = d.component
-          .map((c) => c.code.display || c.code.code)
-          .join(", ");
-        return `- ${name} (components: ${comps})`;
-      }
-      return `- ${name}${d.permitted_unit ? ` (unit: ${d.permitted_unit.code})` : ""}`;
-    })
-    .join("\n");
-
-  return `Extract lab results from this image. Return ONLY valid JSON (no markdown).
-I need results for these specific tests:
-${testList}
-
-Return format:
-[
-  {
-    "test_name": "exact test name from above",
-    "value": "numeric or text result",
-    "unit": "unit if visible",
-    "components": [
-      { "name": "component name", "value": "result", "unit": "unit" }
-    ]
-  }
-]`;
 }
 
 function fuzzyMatch(extracted: string, candidate: string): boolean {
@@ -138,60 +104,12 @@ function mapResults(
   return results;
 }
 
-async function extractLabResults(
-  base64: string,
-  mimeType: string,
-  apiKey: string,
-  definitions: ObservationDefinition[],
-): Promise<LabResult[]> {
-  const body = JSON.stringify({
-    contents: [
-      {
-        parts: [
-          { text: buildPrompt(definitions) },
-          { inline_data: { mime_type: mimeType, data: base64 } },
-        ],
-      },
-    ],
-    generationConfig: { temperature: 0.1 },
-  });
-
-  const MAX_RETRIES = 3;
-  let res: Response | undefined;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    res = await fetch(GEMINI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body,
-    });
-    if (res.status !== 429 || attempt === MAX_RETRIES) break;
-    await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
-  }
-
-  if (!res || !res.ok) {
-    throw new Error(`Gemini API error: ${res?.status ?? "unknown"}`);
-  }
-
-  const json = await res.json();
-  const text: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  const cleaned = text
-    .replace(/```json\s*/g, "")
-    .replace(/```\s*/g, "")
-    .trim();
-
-  return JSON.parse(cleaned) as LabResult[];
-}
-
 export default function DiagnosticReportOCR({
   observationDefinitions,
   handleComponentValueChange,
   handleValueChange,
   handleUnitChange,
   disabled,
-  __meta,
 }: {
   observationDefinitions: ObservationDefinition[];
   handleComponentValueChange: (
@@ -208,12 +126,6 @@ export default function DiagnosticReportOCR({
   ) => void;
   handleUnitChange: (definitionId: string, index: number, unit: string) => void;
   disabled?: boolean;
-  __meta?: {
-    config?: {
-      REACT_APP_GEMINI_API_KEY?: string;
-    };
-    [key: string]: unknown;
-  };
 }) {
   const onExtracted = useCallback(
     (
@@ -256,11 +168,6 @@ export default function DiagnosticReportOCR({
   );
   const enabled = useAtomValue(enabledAtom);
 
-  const GEMINI_API_KEY =
-    __meta?.config?.REACT_APP_GEMINI_API_KEY ??
-    import.meta.env.REACT_APP_GEMINI_API_KEY ??
-    "";
-
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
@@ -269,24 +176,14 @@ export default function DiagnosticReportOCR({
 
   const handleFile = useCallback(
     async (file: File) => {
-      if (!GEMINI_API_KEY) {
-        setError(t("gemini_key_not_configured"));
-        setStatus("error");
-        return;
-      }
-
       setStatus("processing");
       setError("");
       setPreview(URL.createObjectURL(file));
 
       try {
-        const base64 = await fileToBase64(file);
-        const labResults = await extractLabResults(
-          base64,
-          file.type,
-          GEMINI_API_KEY,
-          observationDefinitions,
-        );
+        // Send the File object directly to the API
+        const prompt = buildLabResultsPrompt(observationDefinitions);
+        const labResults = await extractLabResults<LabResult[]>(file, prompt);
         const mapped = mapResults(labResults, observationDefinitions);
         onExtracted(mapped);
 
@@ -298,7 +195,7 @@ export default function DiagnosticReportOCR({
         setStatus("error");
       }
     },
-    [GEMINI_API_KEY, observationDefinitions, onExtracted, t],
+    [observationDefinitions, onExtracted, t],
   );
 
   const handleInputChange = useCallback(
@@ -317,7 +214,7 @@ export default function DiagnosticReportOCR({
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
-  if (disabled || !enabled || !GEMINI_API_KEY) return null;
+  if (disabled || !enabled) return null;
 
   return (
     <div className="w-full">

@@ -5,7 +5,7 @@ AI-powered [CARE](https://github.com/ohcnetwork/care_fe) App (plugin) to extract
 ## Features
 
 - 📷 **Scan or upload** — pick an image from camera, gallery, or file picker
-- 🤖 **AI-powered extraction** — uses Gemini Flash to extract structured patient data from form images
+- 🤖 **AI-powered extraction** — uses Care AI backend to extract structured patient data from form images
 - 🏛️ **Governance resolution** — automatically resolves State → District → Local Body → Ward hierarchy via Care's Organization API
 - ✅ **Auto-fills form fields** — name, phone, gender, DOB/age, blood group, address, pincode, and governance location
 - 🔁 **Retry on failure** — reprocesses the same image without re-upload
@@ -16,6 +16,7 @@ AI-powered [CARE](https://github.com/ohcnetwork/care_fe) App (plugin) to extract
 ### Prerequisites
 
 - A running [Care frontend](https://github.com/ohcnetwork/care_fe) instance to host this plugin
+- A running [Care backend](https://github.com/ohcnetwork/care) with [care_ai plugin](https://github.com/ohcnetwork/care_ai) installed
 
 ### Installation
 
@@ -27,15 +28,9 @@ npm install
 
 ### Configuration
 
-Create a `.env.local` file:
+No additional configuration needed! The plugin uses the Care AI backend which is configured at the server level.
 
-```env
-REACT_APP_GEMINI_API_KEY=your_gemini_api_key_here
-```
-
-You can obtain a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
-
-> The plugin also supports receiving the API key via `__meta.config.REACT_APP_GEMINI_API_KEY` from the host Care app.
+> The Care AI backend handles all AI provider credentials (Gemini, OpenAI, Azure, etc.) securely on the server side.
 
 ### Development
 
@@ -55,7 +50,9 @@ npm run build
 
 1. User clicks "Scan Registration Form" on the patient registration page
 2. Browser shows native image picker (camera / gallery / files)
-3. Image is sent to Gemini Flash API for structured data extraction
-4. Extracted fields are validated and auto-filled into the form
-5. Governance hierarchy (state/district/local body/ward) is resolved via Care's Organization API
-6. User reviews extracted data and confirms
+3. Image is sent to Care AI backend (`/api/care_ai/ask/`) for structured data extraction
+4. Care AI backend processes the request using configured AI provider (Gemini, OpenAI, etc.)
+5. Extracted fields are validated and auto-filled into the form
+6. Governance hierarchy (state/district/local body/ward) is resolved via Care's Organization API
+7. User reviews extracted data and confirms
+

@@ -24,7 +24,6 @@ import {
   BLOOD_GROUP_MAP,
   ExtractedData,
   extractDataFromImage,
-  fileToBase64,
   normalizePhone,
   resolveGeoOrganization,
 } from "@/lib/ocr";
@@ -43,7 +42,6 @@ interface FormLike {
 export default function OCRFormFill({
   form,
   patientId,
-  __meta,
 }: {
   form: FormLike;
   facilityId?: string;
@@ -63,10 +61,7 @@ export default function OCRFormFill({
     [user.id, user.username],
   );
   const enabled = useAtomValue(enabledAtom);
-  const GEMINI_API_KEY =
-    __meta?.config?.REACT_APP_GEMINI_API_KEY ??
-    import.meta.env.REACT_APP_GEMINI_API_KEY ??
-    "";
+
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
@@ -184,13 +179,7 @@ export default function OCRFormFill({
       setPreview(URL.createObjectURL(file));
 
       try {
-        const base64 = await fileToBase64(file);
-        const mimeType = file.type || "image/jpeg";
-        const data = await extractDataFromImage(
-          base64,
-          mimeType,
-          GEMINI_API_KEY,
-        );
+        const data = await extractDataFromImage(file);
         await applyData(data);
         setStatus("success");
       } catch (e: unknown) {
@@ -200,7 +189,7 @@ export default function OCRFormFill({
         setStatus("error");
       }
     },
-    [applyData, GEMINI_API_KEY],
+    [applyData],
   );
 
   const handleFile = useCallback(
