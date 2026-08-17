@@ -59,15 +59,19 @@ const REGISTRATION_FORM_FIELDS: MedispeakFieldSpec[] = [
  * document/OCR pipeline (proxied through care_filly for the account secret).
  * @param imageFile - The actual File object from input
  * @param facilityId - Required to create the underlying Medispeak session
+ * @param onTranscript - Called with the document's raw OCR'd text as soon
+ * as it's available, ahead of the structured fields (see `runMedispeakOcr`)
  */
 export async function extractDataFromImage(
   imageFile: File,
   facilityId?: string | null,
+  onTranscript?: (text: string) => void,
 ): Promise<ExtractedData> {
-  const result = await runMedispeakOcr(imageFile, {
-    facilityId,
-    fields: REGISTRATION_FORM_FIELDS,
-  });
+  const result = await runMedispeakOcr(
+    imageFile,
+    { facilityId, fields: REGISTRATION_FORM_FIELDS },
+    { onTranscript },
+  );
   return result as ExtractedData;
 }
 

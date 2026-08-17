@@ -189,8 +189,20 @@ const TERMINAL_STATUSES = new Set(["completed", "partial", "failed"]);
  */
 export async function pollMedispeakFormResult(
   handle: MedispeakSessionHandle,
-  { intervalMs = 750, maxAttempts = 160 } = {},
+  {
+    intervalMs = 750,
+    maxAttempts = 160,
+    onTranscript,
+  }: {
+    intervalMs?: number;
+    maxAttempts?: number;
+    /** Called with the document's raw OCR'd text as soon as Medispeak has
+     * it — this typically arrives well before the structured "form"
+     * output, while the session is still `processing`. */
+    onTranscript?: (text: string) => void;
+  } = {},
 ): Promise<Record<string, unknown>> {
+  let lastTranscript = "";
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const payload = await withTokenRefresh(handle, async (token) => {
       const response = await medispeakFetch(
@@ -199,6 +211,13 @@ export async function pollMedispeakFormResult(
       );
       return response.json();
     });
+
+    const transcriptText = (payload.transcript as { text?: string } | null)
+      ?.text;
+    if (transcriptText && transcriptText !== lastTranscript) {
+      lastTranscript = transcriptText;
+      onTranscript?.(transcriptText);
+    }
 
     if (TERMINAL_STATUSES.has(payload.status)) {
       const outputs = (payload.outputs as Array<Record<string, unknown>>) || [];
@@ -224,9 +243,10 @@ export async function pollMedispeakFormResult(
 export async function runMedispeakOcr(
   file: File,
   params: CreateParams,
+  options?: { onTranscript?: (text: string) => void },
 ): Promise<Record<string, unknown>> {
   const handle = await createMedispeakDocumentSession(params);
   await uploadMedispeakDocument(handle, file);
   await commitMedispeakSession(handle);
-  return pollMedispeakFormResult(handle);
+  return pollMedispeakFormResult(handle, options);
 }

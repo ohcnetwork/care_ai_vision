@@ -196,93 +196,95 @@ export default function DiagnosticReportOCR({
   if (disabled || !enabled) return null;
 
   return (
-    <div className="w-full">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="hidden"
-        onChange={handleInputChange}
-      />
+    <div className="care-ai-vision-container">
+      <div className="w-full">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handleInputChange}
+        />
 
-      {status === "idle" && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Camera className="h-4 w-4" />
-          {t("scan_lab_report")}
-        </Button>
-      )}
+        {status === "idle" && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Camera className="h-4 w-4" />
+            {t("scan_lab_report")}
+          </Button>
+        )}
 
-      {status === "processing" && (
-        <div className="flex items-center gap-3 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
-          {preview && (
-            <img
-              src={preview}
-              alt="Lab report preview"
-              className="h-12 w-12 rounded object-cover"
-            />
-          )}
-          <div className="flex items-center gap-2 text-sm text-blue-700">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {t("extracting_lab_results")}
+        {status === "processing" && (
+          <div className="flex items-center gap-3 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
+            {preview && (
+              <img
+                src={preview}
+                alt="Lab report preview"
+                className="h-12 w-12 rounded object-cover"
+              />
+            )}
+            <div className="flex items-center gap-2 text-sm text-blue-700">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {t("extracting_lab_results")}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {status === "success" && (
-        <div className="flex items-center gap-3 rounded-lg border border-green-100 bg-green-50/50 p-3">
-          {preview && (
-            <img
-              src={preview}
-              alt="Lab report preview"
-              className="h-12 w-12 rounded object-cover"
-            />
-          )}
-          <div className="flex flex-1 items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 text-green-600" />
-            <span className="text-sm text-green-700">
-              {t("filled_lab_fields", { count: filledCount })}
-            </span>
-            <Badge
-              variant="secondary"
-              className="bg-green-100 text-green-700 text-xs"
+        {status === "success" && (
+          <div className="flex items-center gap-3 rounded-lg border border-green-100 bg-green-50/50 p-3">
+            {preview && (
+              <img
+                src={preview}
+                alt="Lab report preview"
+                className="h-12 w-12 rounded object-cover"
+              />
+            )}
+            <div className="flex flex-1 items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <span className="text-sm text-green-700">
+                {t("filled_lab_fields", { count: filledCount })}
+              </span>
+              <Badge
+                variant="secondary"
+                className="bg-green-100 text-green-700 text-xs"
+              >
+                {filledCount}
+              </Badge>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={reset}
+              className="text-gray-500 hover:text-gray-700"
             >
-              {filledCount}
-            </Badge>
+              <RotateCcw className="h-3.5 w-3.5" />
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={reset}
-            className="text-gray-500 hover:text-gray-700"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      )}
+        )}
 
-      {status === "error" && (
-        <div className="flex items-center gap-3 rounded-lg border border-red-100 bg-red-50/50 p-3">
-          <AlertCircle className="h-4 w-4 text-red-500" />
-          <span className="flex-1 text-sm text-red-600">{error}</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={reset}
-            className="text-gray-500 hover:text-gray-700"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      )}
+        {status === "error" && (
+          <div className="flex items-center gap-3 rounded-lg border border-red-100 bg-red-50/50 p-3">
+            <AlertCircle className="h-4 w-4 text-red-500" />
+            <span className="flex-1 text-sm text-red-600">{error}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={reset}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
