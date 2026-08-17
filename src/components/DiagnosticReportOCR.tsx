@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
 
 import useAuthUser from "@/hooks/useAuthUser";
 import { useTranslation } from "@/hooks/useTranslation";
-import { extractLabResults, buildLabResultsPrompt } from "@/lib/ocr";
+import { extractLabResults } from "@/lib/ocr";
+import { resolveFacilityIdFromPath } from "@/lib/facility";
 import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
 
 type Status = "idle" | "processing" | "success" | "error";
@@ -40,65 +41,41 @@ interface ExtractedResult {
   }[];
 }
 
-interface LabResult {
-  test_name: string;
-  value: string;
-  unit?: string;
-  components?: { name: string; value: string; unit?: string }[];
-}
-
-function fuzzyMatch(extracted: string, candidate: string): boolean {
-  const a = extracted.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const b = candidate.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return a === b || a.includes(b) || b.includes(a);
-}
-
-function matchDefinition(
-  testName: string,
-  definitions: ObservationDefinition[],
-): ObservationDefinition | undefined {
-  return definitions.find((d) => {
-    const candidates = [d.title, d.code?.display, d.code?.code].filter(
-      Boolean,
-    ) as string[];
-    return candidates.some((c) => fuzzyMatch(testName, c));
-  });
-}
-
+/** Looks up each definition's `<id>__value`/`<id>__unit` keys directly, no fuzzy matching. */
 function mapResults(
-  labResults: LabResult[],
+  result: Record<string, unknown>,
   definitions: ObservationDefinition[],
 ): ExtractedResult[] {
+  const asString = (v: unknown) => (v == null ? "" : String(v));
   const results: ExtractedResult[] = [];
 
-  for (const lr of labResults) {
-    const def = matchDefinition(lr.test_name, definitions);
-    if (!def) continue;
-
-    if (lr.components?.length && def.component?.length) {
-      const values = lr.components
+  for (const def of definitions) {
+    if (def.component?.length) {
+      const values = def.component
         .map((comp) => {
-          const matchedComp = def.component!.find((dc) =>
-            fuzzyMatch(comp.name, dc.code.display || dc.code.code),
-          );
-          if (!matchedComp) return null;
+          const prefix = `${def.id}__${comp.code.code}`;
+          const value = asString(result[`${prefix}__value`]);
+          if (!value) return null;
           return {
-            value: comp.value,
-            unit: comp.unit,
-            componentCode: matchedComp.code.code,
+            value,
+            unit: asString(result[`${prefix}__unit`]) || undefined,
+            componentCode: comp.code.code,
           };
         })
         .filter(Boolean) as ExtractedResult["values"];
 
-      if (values.length) {
-        results.push({ definitionId: def.id, values });
-      }
-    } else {
-      results.push({
-        definitionId: def.id,
-        values: [{ value: lr.value, unit: lr.unit }],
-      });
+      if (values.length) results.push({ definitionId: def.id, values });
+      continue;
     }
+
+    const value = asString(result[`${def.id}__value`]);
+    if (!value) continue;
+    results.push({
+      definitionId: def.id,
+      values: [
+        { value, unit: asString(result[`${def.id}__unit`]) || undefined },
+      ],
+    });
   }
 
   return results;
@@ -181,9 +158,11 @@ export default function DiagnosticReportOCR({
       setPreview(URL.createObjectURL(file));
 
       try {
-        // Send the File object directly to the API
-        const prompt = buildLabResultsPrompt(observationDefinitions);
-        const labResults = await extractLabResults<LabResult[]>(file, prompt);
+        const labResults = await extractLabResults(
+          file,
+          observationDefinitions,
+          resolveFacilityIdFromPath(),
+        );
         const mapped = mapResults(labResults, observationDefinitions);
         onExtracted(mapped);
 

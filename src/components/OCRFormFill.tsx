@@ -41,6 +41,7 @@ interface FormLike {
 
 export default function OCRFormFill({
   form,
+  facilityId,
   patientId,
 }: {
   form: FormLike;
@@ -48,9 +49,6 @@ export default function OCRFormFill({
   patientId?: string;
   submitForm?: () => void;
   __meta?: {
-    config?: {
-      REACT_APP_GEMINI_API_KEY?: string;
-    };
     [key: string]: unknown;
   };
 }) {
@@ -179,7 +177,7 @@ export default function OCRFormFill({
       setPreview(URL.createObjectURL(file));
 
       try {
-        const data = await extractDataFromImage(file);
+        const data = await extractDataFromImage(file, facilityId);
         await applyData(data);
         setStatus("success");
       } catch (e: unknown) {
@@ -189,7 +187,7 @@ export default function OCRFormFill({
         setStatus("error");
       }
     },
-    [applyData],
+    [applyData, facilityId],
   );
 
   const handleFile = useCallback(

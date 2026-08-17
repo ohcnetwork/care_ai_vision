@@ -20,6 +20,5 @@
   "scan_lab_report": "Scan lab report",
   "extracting_lab_results": "Extracting lab results…",
   "filled_lab_fields": "Filled {{count}} field(s)",
-  "gemini_key_not_configured": "Gemini API key is not configured",
   "extraction_failed": "Extraction failed"
 }

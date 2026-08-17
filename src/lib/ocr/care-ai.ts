@@ -1,152 +1,140 @@
+import { MedispeakFieldSpec, runMedispeakOcr } from "./medispeak";
 import { ExtractedData } from "./types";
-import { getHeaders } from "@/lib/request";
 
-const EXTRACTION_PROMPT = `You are an OCR data extraction assistant. Analyze this image of a patient registration form and extract the following fields. Return ONLY a valid JSON object with these keys (omit keys if the value is not found):
-
-- name: patient full name (string)
-- phone_number: phone number with country code, e.g. "+911234567890" (string)
-- emergency_phone_number: emergency contact phone with country code (string)
-- gender: one of "male", "female", "transgender", "non_binary" (string, lowercase)
-- date_of_birth: date of birth in "YYYY-MM-DD" format (string) — extract this if a full date is visible
-- age: age in years (number) — extract this if only age is written, not a full date
-- blood_group: blood group like "A+", "B-", "O+", "AB+" etc. (string)
-- address: current address (string)
-- permanent_address: permanent address (string)
-- pincode: PIN/ZIP code (number)
-- state: state name (string) — extract if visible
-- district: district name (string) — extract if visible
-- local_body: local body / municipality / panchayat name (string) — extract if visible
-- ward: ward name or number (string) — extract if visible
-
-Return ONLY the JSON object, no markdown, no explanation.`;
+/** Field schema matching `ExtractedData`, extracted via Medispeak's typed "form" output. */
+const REGISTRATION_FORM_FIELDS: MedispeakFieldSpec[] = [
+  { key: "name", label: "Patient full name", type: "string" },
+  {
+    key: "phone_number",
+    label: "Phone number",
+    type: "string",
+    description: 'With country code, e.g. "+911234567890"',
+  },
+  {
+    key: "emergency_phone_number",
+    label: "Emergency contact phone number",
+    type: "string",
+    description: "With country code",
+  },
+  {
+    key: "gender",
+    label: "Gender",
+    type: "single_select",
+    enum: ["male", "female", "transgender", "non_binary"],
+  },
+  {
+    key: "date_of_birth",
+    label: "Date of birth",
+    type: "string",
+    description:
+      'Full date in "YYYY-MM-DD" format, only if a full date is visible',
+  },
+  {
+    key: "age",
+    label: "Age in years",
+    type: "number",
+    description: "Only if just an age is written, not a full date of birth",
+  },
+  {
+    key: "blood_group",
+    label: "Blood group",
+    type: "string",
+    description: 'e.g. "A+", "B-", "O+", "AB+"',
+  },
+  { key: "address", label: "Current address", type: "string" },
+  { key: "permanent_address", label: "Permanent address", type: "string" },
+  { key: "pincode", label: "PIN/ZIP code", type: "number" },
+  { key: "state", label: "State", type: "string" },
+  { key: "district", label: "District", type: "string" },
+  {
+    key: "local_body",
+    label: "Local body / municipality / panchayat",
+    type: "string",
+  },
+  { key: "ward", label: "Ward name or number", type: "string" },
+];
 
 /**
- * Extract patient registration data from image using care_ai backend
+ * Extract patient registration data from an image via Medispeak's
+ * document/OCR pipeline (proxied through care_filly for the account secret).
  * @param imageFile - The actual File object from input
+ * @param facilityId - Required to create the underlying Medispeak session
  */
 export async function extractDataFromImage(
   imageFile: File,
+  facilityId?: string | null,
 ): Promise<ExtractedData> {
-  const url = new URL("/api/care_ai/ask/", window.CARE_API_URL);
-  
-  // Create FormData for multipart upload
-  const formData = new FormData();
-  
-  // Add the extraction prompt as 'prompt' field
-  formData.append("prompt", EXTRACTION_PROMPT);
-  
-  // Append the actual File object directly
-  formData.append("images", imageFile);
-  
-  // Get auth headers (without Content-Type, let browser set it for multipart)
-  const headers = getHeaders();
-  headers.delete("Content-Type"); // Let browser set boundary for multipart/form-data
-  
-  const res = await fetch(url.toString(), {
-    method: "POST",
-    headers,
-    body: formData,
+  const result = await runMedispeakOcr(imageFile, {
+    facilityId,
+    fields: REGISTRATION_FORM_FIELDS,
   });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "Unknown error");
-    throw new Error(`AI API error: ${res.status} - ${errorText}`);
-  }
-
-  const json = await res.json();
-  const result: string = json?.result ?? "";
-
-  // Clean up markdown formatting if present
-  const cleaned = result
-    .replace(/```json\s*/g, "")
-    .replace(/```\s*/g, "")
-    .trim();
-
-  return JSON.parse(cleaned) as ExtractedData;
+  return result as ExtractedData;
 }
 
-/**
- * Build prompt for lab results extraction
- */
-export function buildLabResultsPrompt(
-  definitions: Array<{
-    id: string;
-    title?: string;
-    code?: { code: string; display?: string };
-    component?: { code: { code: string; display?: string } }[];
-    permitted_unit?: { code: string; display?: string; system?: string } | null;
-  }>,
-): string {
-  const testList = definitions
-    .map((d) => {
-      const name = d.title || d.code?.display || d.code?.code;
-      if (d.component?.length) {
-        const comps = d.component
-          .map((c) => c.code.display || c.code.code)
-          .join(", ");
-        return `- ${name} (components: ${comps})`;
+interface LabDefinitionLike {
+  id: string;
+  title?: string;
+  code?: { code: string; display?: string };
+  component?: { code: { code: string; display?: string } }[];
+  permitted_unit?: { code: string; display?: string; system?: string } | null;
+}
+
+/** `<definitionId>__value` / `<definitionId>__unit` field keys, one pair per
+ * test (or per component), so results map back with no fuzzy name matching. */
+export function buildLabFieldSpecs(
+  definitions: LabDefinitionLike[],
+): MedispeakFieldSpec[] {
+  const specs: MedispeakFieldSpec[] = [];
+  for (const d of definitions) {
+    const name = d.title || d.code?.display || d.code?.code || d.id;
+    if (d.component?.length) {
+      for (const c of d.component) {
+        const compName = c.code.display || c.code.code;
+        const prefix = `${d.id}__${c.code.code}`;
+        specs.push({
+          key: `${prefix}__value`,
+          label: `${name} - ${compName} value`,
+          type: "string",
+        });
+        specs.push({
+          key: `${prefix}__unit`,
+          label: `${name} - ${compName} unit`,
+          type: "string",
+        });
       }
-      return `- ${name}${d.permitted_unit ? ` (unit: ${d.permitted_unit.code})` : ""}`;
-    })
-    .join("\n");
-
-  return `Extract lab results from this image. Return ONLY valid JSON (no markdown).
-I need results for these specific tests:
-${testList}
-
-Return format:
-[
-  {
-    "test_name": "exact test name from above",
-    "value": "numeric or text result",
-    "unit": "unit if visible",
-    "components": [
-      { "name": "component name", "value": "result", "unit": "unit" }
-    ]
+      continue;
+    }
+    specs.push({
+      key: `${d.id}__value`,
+      label: `${name} value`,
+      type: "string",
+      description: d.permitted_unit
+        ? `Numeric or text result; expected unit: ${d.permitted_unit.code}`
+        : undefined,
+    });
+    specs.push({
+      key: `${d.id}__unit`,
+      label: `${name} unit`,
+      type: "string",
+    });
   }
-]`;
+  return specs;
 }
 
 /**
- * Extract lab results from diagnostic report image using care_ai backend
+ * Extract lab results from a diagnostic report image via Medispeak's
+ * document/OCR pipeline, keyed by definition id (see `buildLabFieldSpecs`).
  * @param imageFile - The actual File object from input
- * @param prompt - The lab extraction prompt
+ * @param definitions - The report's observation definitions
+ * @param facilityId - Required to create the underlying Medispeak session
  */
-export async function extractLabResults<T>(
+export async function extractLabResults(
   imageFile: File,
-  prompt: string,
-): Promise<T> {
-  const url = new URL("/api/care_ai/ask/", window.CARE_API_URL);
-  
-  const formData = new FormData();
-  
-  // Add the lab extraction prompt as 'prompt' field
-  formData.append("prompt", prompt);
-  
-  // Append the actual File object directly
-  formData.append("images", imageFile);
-  
-  const headers = getHeaders();
-  headers.delete("Content-Type");
-  
-  const res = await fetch(url.toString(), {
-    method: "POST",
-    headers,
-    body: formData,
+  definitions: LabDefinitionLike[],
+  facilityId?: string | null,
+): Promise<Record<string, unknown>> {
+  return runMedispeakOcr(imageFile, {
+    facilityId,
+    fields: buildLabFieldSpecs(definitions),
   });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "Unknown error");
-    throw new Error(`AI API error: ${res.status} - ${errorText}`);
-  }
-
-  const json = await res.json();
-  const result: string = json?.result ?? "";
-
-  const cleaned = result
-    .replace(/```json\s*/g, "")
-    .replace(/```\s*/g, "")
-    .trim();
-
-  return JSON.parse(cleaned) as T;
 }
