@@ -328,6 +328,7 @@ export default function DiagnosticReportOCR({
           ref={fileInputRef}
           type="file"
           accept="image/*,.pdf,application/pdf"
+          multiple
           className="hidden"
           onChange={onInputChange}
         />
