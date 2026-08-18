@@ -15,6 +15,7 @@
   "filled_lab_fields": "Filled {{count}} field(s)",
   "filling_fields": "Filling {{count}} field(s)…",
   "minimize_transcript": "Minimize transcript",
+  "no_permission_ai_vision": "You do not have permission to use AI Vision on this facility.",
   "ocr_form_fill": "AI Vision Form Fill",
   "plugin_disabled": "The AI Vision plugin is currently disabled.",
   "plugin_enabled": "The AI Vision plugin is currently enabled.",
