@@ -1,7 +1,6 @@
 import { MedispeakFieldSpec, runMedispeakOcr } from "./medispeak";
 import { ExtractedData } from "./types";
 
-/** Field schema matching `ExtractedData`, extracted via Medispeak's typed "form" output. */
 const REGISTRATION_FORM_FIELDS: MedispeakFieldSpec[] = [
   { key: "name", label: "Patient full name", type: "string" },
   {
@@ -54,14 +53,6 @@ const REGISTRATION_FORM_FIELDS: MedispeakFieldSpec[] = [
   { key: "ward", label: "Ward name or number", type: "string" },
 ];
 
-/**
- * Extract patient registration data from an image via Medispeak's
- * document/OCR pipeline (proxied through care_filly for the account secret).
- * @param imageFile - The actual File object from input
- * @param facilityId - Required to create the underlying Medispeak session
- * @param onTranscript - Called with the document's raw OCR'd text as soon
- * as it's available, ahead of the structured fields (see `runMedispeakOcr`)
- */
 export async function extractDataFromImage(
   imageFile: File,
   facilityId?: string | null,
@@ -83,62 +74,141 @@ interface LabDefinitionLike {
   permitted_unit?: { code: string; display?: string; system?: string } | null;
 }
 
-/** `<definitionId>__value` / `<definitionId>__unit` field keys, one pair per
- * test (or per component), so results map back with no fuzzy name matching. */
-export function buildLabFieldSpecs(
-  definitions: LabDefinitionLike[],
-): MedispeakFieldSpec[] {
-  const specs: MedispeakFieldSpec[] = [];
-  for (const d of definitions) {
-    const name = d.title || d.code?.display || d.code?.code || d.id;
-    if (d.component?.length) {
-      for (const c of d.component) {
-        const compName = c.code.display || c.code.code;
-        const prefix = `${d.id}__${c.code.code}`;
-        specs.push({
-          key: `${prefix}__value`,
-          label: `${name} - ${compName} value`,
-          type: "string",
-        });
-        specs.push({
-          key: `${prefix}__unit`,
-          label: `${name} - ${compName} unit`,
-          type: "string",
-        });
-      }
-      continue;
-    }
-    specs.push({
-      key: `${d.id}__value`,
-      label: `${name} value`,
-      type: "string",
-      description: d.permitted_unit
-        ? `Numeric or text result; expected unit: ${d.permitted_unit.code}`
-        : undefined,
-    });
-    specs.push({
-      key: `${d.id}__unit`,
-      label: `${name} unit`,
-      type: "string",
-    });
-  }
-  return specs;
+export interface LabFieldTarget {
+  definitionId: string;
+  kind: "value" | "unit";
+  componentCode?: string;
 }
 
-/**
- * Extract lab results from a diagnostic report image via Medispeak's
- * document/OCR pipeline, keyed by definition id (see `buildLabFieldSpecs`).
- * @param imageFile - The actual File object from input
- * @param definitions - The report's observation definitions
- * @param facilityId - Required to create the underlying Medispeak session
- */
+export type LabFieldKeyMap = Record<string, LabFieldTarget>;
+
+function slugCode(code?: string): string {
+  return (code ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function definitionAliases(definitions: LabDefinitionLike[]): string[] {
+  const used = new Set<string>();
+  return definitions.map((d, i) => {
+    const preferred = slugCode(d.code?.code);
+    let alias = preferred && !used.has(preferred) ? preferred : `f${i}`;
+    if (used.has(alias)) {
+      let n = i;
+      while (used.has(`f${n}`)) n += 1;
+      alias = `f${n}`;
+    }
+    used.add(alias);
+    return alias;
+  });
+}
+
+function uniqueComponentSlug(
+  code: string,
+  index: number,
+  used: Set<string>,
+): string {
+  const preferred = slugCode(code);
+  let alias = preferred && !used.has(preferred) ? preferred : `c${index}`;
+  if (used.has(alias)) {
+    let n = index;
+    while (used.has(`c${n}`)) n += 1;
+    alias = `c${n}`;
+  }
+  used.add(alias);
+  return alias;
+}
+
+function canonicalLabKey(target: LabFieldTarget): string {
+  const prefix = target.componentCode
+    ? `${target.definitionId}__${target.componentCode}`
+    : target.definitionId;
+  return `${prefix}__${target.kind}`;
+}
+
+function remapLabResult(
+  result: Record<string, unknown>,
+  keyMap: LabFieldKeyMap,
+): Record<string, unknown> {
+  const remapped: Record<string, unknown> = {};
+  for (const [shortKey, value] of Object.entries(result)) {
+    const target = keyMap[shortKey];
+    if (!target) continue;
+    remapped[canonicalLabKey(target)] = value;
+  }
+  return remapped;
+}
+
+export function buildLabFieldSpecs(definitions: LabDefinitionLike[]): {
+  specs: MedispeakFieldSpec[];
+  keyMap: LabFieldKeyMap;
+} {
+  const specs: MedispeakFieldSpec[] = [];
+  const keyMap: LabFieldKeyMap = {};
+  const aliases = definitionAliases(definitions);
+
+  const addPair = (
+    alias: string,
+    target: Omit<LabFieldTarget, "kind">,
+    labelBase: string,
+    description?: string,
+  ) => {
+    const valueKey = `${alias}_v`;
+    const unitKey = `${alias}_u`;
+    keyMap[valueKey] = { ...target, kind: "value" };
+    keyMap[unitKey] = { ...target, kind: "unit" };
+    specs.push({
+      key: valueKey,
+      label: `${labelBase} value`,
+      type: "string",
+      description,
+    });
+    specs.push({
+      key: unitKey,
+      label: `${labelBase} unit`,
+      type: "string",
+    });
+  };
+
+  definitions.forEach((d, i) => {
+    const alias = aliases[i];
+    const name = d.title || d.code?.display || d.code?.code || `field ${i}`;
+    if (d.component?.length) {
+      const usedComps = new Set<string>();
+      d.component.forEach((c, j) => {
+        const compSlug = uniqueComponentSlug(c.code.code, j, usedComps);
+        const compName = c.code.display || c.code.code;
+        addPair(
+          `${alias}_${compSlug}`,
+          { definitionId: d.id, componentCode: c.code.code },
+          `${name} - ${compName}`,
+        );
+      });
+      return;
+    }
+    addPair(
+      alias,
+      { definitionId: d.id },
+      name,
+      d.permitted_unit
+        ? `Numeric or text result; expected unit: ${d.permitted_unit.code}`
+        : undefined,
+    );
+  });
+
+  return { specs, keyMap };
+}
+
 export async function extractLabResults(
-  imageFile: File,
+  files: File | File[],
   definitions: LabDefinitionLike[],
   facilityId?: string | null,
 ): Promise<Record<string, unknown>> {
-  return runMedispeakOcr(imageFile, {
+  const { specs, keyMap } = buildLabFieldSpecs(definitions);
+  const result = await runMedispeakOcr(files, {
     facilityId,
-    fields: buildLabFieldSpecs(definitions),
+    fields: specs,
   });
+  return remapLabResult(result, keyMap);
 }

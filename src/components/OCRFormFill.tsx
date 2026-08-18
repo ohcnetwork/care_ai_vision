@@ -14,19 +14,19 @@ import useAuthUser from "@/hooks/useAuthUser";
 import { useDraggableFab } from "@/hooks/useDraggableFab";
 import { useTranslation } from "@/hooks/useTranslation";
 import {
-  BLOOD_GROUP_MAP,
   ExtractedData,
   extractDataFromImage,
   highlightField,
+  normalizeBloodGroup,
+  normalizeIsoDate,
   normalizePhone,
+  normalizePincode,
   resolveGeoOrganization,
 } from "@/lib/ocr";
 import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
 
 type Status = "idle" | "processing" | "filling" | "success" | "error";
 
-/** Delay between each field's direct-fill so the highlight animation reads
- * as a sequence rather than everything flashing at once. */
 const FIELD_FILL_DELAY_MS = 350;
 
 interface FormLike {
@@ -35,9 +35,9 @@ interface FormLike {
     value: string | number | boolean,
     options?: { shouldValidate?: boolean; shouldDirty?: boolean },
   ) => void;
+  clearErrors?: (name?: string | string[]) => void;
 }
 
-/** One extracted field, deferred until the fill animation reaches it. */
 interface FillStep {
   field: string;
   apply: () => void;
@@ -75,7 +75,6 @@ export default function OCRFormFill({
   const lastFileRef = useRef<File | null>(null);
   const fillTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // Lets the widget be dragged clear of a page's own submit button.
   const fabDrag = useDraggableFab(user.id ?? null);
   const fabDragStyle = {
     transform: `translate3d(${fabDrag.offset.x}px, ${fabDrag.offset.y}px, 0)`,
@@ -89,7 +88,6 @@ export default function OCRFormFill({
   };
   useEffect(() => clearFillTimeouts, []);
 
-  // Revokes the previous object URL whenever `preview` changes or unmounts.
   useEffect(() => {
     return () => {
       if (preview) URL.revokeObjectURL(preview);
@@ -98,13 +96,11 @@ export default function OCRFormFill({
 
   const setField = useCallback(
     (field: string, value: string | number | boolean) => {
-      form.setValue(field, value, { shouldValidate: true, shouldDirty: true });
+      form.setValue(field, value, { shouldValidate: false, shouldDirty: true });
     },
     [form],
   );
 
-  /** Builds the ordered list of fields to fill, without writing to the form
-   * yet — that happens one step at a time as the fill animation runs. */
   const buildFillSteps = useCallback(
     async (data: ExtractedData): Promise<FillStep[]> => {
       const steps: FillStep[] = [];
@@ -142,29 +138,30 @@ export default function OCRFormFill({
         });
       }
 
-      if (data.date_of_birth) {
+      const dob = normalizeIsoDate(data.date_of_birth);
+      if (dob) {
         steps.push({
           field: "date_of_birth",
           apply: () => {
+            setField("date_of_birth", dob);
             setField("age_or_dob", "dob");
-            setField("date_of_birth", data.date_of_birth!);
           },
         });
       } else if (data.age) {
         steps.push({
           field: "age",
           apply: () => {
-            setField("age_or_dob", "age");
             setField("age", Number(data.age));
+            setField("age_or_dob", "age");
           },
         });
       }
 
-      if (data.blood_group) {
-        const mapped = BLOOD_GROUP_MAP[data.blood_group.toUpperCase()] ?? "UNK";
+      const bloodGroup = normalizeBloodGroup(data.blood_group);
+      if (bloodGroup) {
         steps.push({
           field: "blood_group",
-          apply: () => setField("blood_group", mapped),
+          apply: () => setField("blood_group", bloodGroup),
         });
       }
 
@@ -188,10 +185,11 @@ export default function OCRFormFill({
         setField("permanent_address_same_as_address", true);
       }
 
-      if (data.pincode) {
+      const pincode = normalizePincode(data.pincode);
+      if (pincode) {
         steps.push({
           field: "pincode",
-          apply: () => setField("pincode", Number(data.pincode)),
+          apply: () => setField("pincode", pincode),
         });
       }
 
@@ -221,28 +219,34 @@ export default function OCRFormFill({
     [setField],
   );
 
-  /** Applies each step in turn, highlighting the field it just wrote to. */
-  const runFillAnimation = useCallback((steps: FillStep[]) => {
-    clearFillTimeouts();
-    setFilledCount(0);
-    setTotalCount(steps.length);
+  const runFillAnimation = useCallback(
+    (steps: FillStep[]) => {
+      clearFillTimeouts();
+      setFilledCount(0);
+      setTotalCount(steps.length);
 
-    if (steps.length === 0) {
-      setStatus("success");
-      return;
-    }
+      if (steps.length === 0) {
+        form.clearErrors?.();
+        setStatus("success");
+        return;
+      }
 
-    setStatus("filling");
-    steps.forEach((step, index) => {
-      const timeoutId = setTimeout(() => {
-        step.apply();
-        highlightField(step.field);
-        setFilledCount(index + 1);
-        if (index === steps.length - 1) setStatus("success");
-      }, index * FIELD_FILL_DELAY_MS);
-      fillTimeoutsRef.current.push(timeoutId);
-    });
-  }, []);
+      setStatus("filling");
+      steps.forEach((step, index) => {
+        const timeoutId = setTimeout(() => {
+          step.apply();
+          highlightField(step.field);
+          setFilledCount(index + 1);
+          if (index === steps.length - 1) {
+            form.clearErrors?.();
+            setStatus("success");
+          }
+        }, index * FIELD_FILL_DELAY_MS);
+        fillTimeoutsRef.current.push(timeoutId);
+      });
+    },
+    [form],
+  );
 
   const processImage = useCallback(
     async (file: File) => {
@@ -301,7 +305,6 @@ export default function OCRFormFill({
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  // Hide in edit mode
   if (patientId) return null;
 
   if (!enabled) {
@@ -322,14 +325,6 @@ export default function OCRFormFill({
         }}
       />
 
-      {/* Floating widget — same fixed-corner, gradient-FAB, drag-to-reposition
-          language as AI Filly. Portaled to <body> so its `fixed` positioning
-          is relative to the real viewport, not a transformed/filtered
-          ancestor (e.g. Radix's animated Accordion/Card wrappers), which
-          would otherwise misplace and potentially clip/hide it. Wrapped in
-          `care-ai-vision-container` because this plugin's Tailwind classes
-          are compiled scoped to that selector (see index.css) — without an
-          ancestor with this class, none of them apply at all. */}
       {createPortal(
         <div className="care-ai-vision-container">
           <div
@@ -342,8 +337,6 @@ export default function OCRFormFill({
           >
             <LongPressIndicator progress={fabDrag.longPressProgress} />
 
-            {/* Raw OCR'd text, arrives before the structured fields do —
-                shown above the widget, same collapsible card as AI Filly */}
             {status === "processing" && transcript && !transcriptMinimized && (
               <div className="w-72 overflow-hidden rounded-2xl border border-gray-100 bg-white/95 shadow-xl backdrop-blur">
                 <div className="flex items-center justify-between border-b border-gray-100 bg-linear-to-r from-blue-100 to-transparent px-3 py-2.5">
@@ -372,7 +365,6 @@ export default function OCRFormFill({
                 className="group relative flex items-center gap-2 overflow-hidden rounded-full py-3 pr-5 pl-4 text-white shadow-lg transition-all bg-linear-to-br from-blue-500 via-blue-600 to-blue-700 shadow-blue-600/25 hover:shadow-xl hover:shadow-blue-600/35 hover:brightness-110 active:scale-95"
                 title={t("scan_registration_form")}
               >
-                {/* soft rotating glow */}
                 <span className="ocr-spin-slow pointer-events-none absolute -inset-16 scale-150 rounded-full bg-[conic-gradient(from_0deg,transparent,rgba(255,255,255,0.35),transparent)] opacity-60" />
                 <Camera className="relative h-5 w-5" />
                 <span className="relative text-sm font-semibold">
@@ -453,9 +445,6 @@ export default function OCRFormFill({
   );
 }
 
-/** Ring + rising 30%-opacity fill with a short status label, shown while
- * the widget is pressed and held, giving visual feedback for the
- * press-and-hold reset gesture. Ported from AI Filly's `LongPressIndicator`. */
 function LongPressIndicator({ progress }: { progress: number }) {
   const { t } = useTranslation();
   if (progress <= 0) return null;
@@ -474,17 +463,11 @@ function LongPressIndicator({ progress }: { progress: number }) {
   );
 }
 
-/** Ported from AI Filly's `AiPulse` — two counter-rotating gradient arc
- * "comets" around a glowing, blinking core. Same care primary palette.
- * Shows the just-uploaded photo in the core once available, so it's clear
- * which image is being processed. */
 function AiOrb({ preview }: { preview: string | null }) {
   return (
     <div className="relative flex h-20 w-20 items-center justify-center">
-      {/* ambient glow */}
       <span className="ocr-glow absolute h-14 w-14 rounded-full bg-blue-400/40 blur-xl" />
 
-      {/* outer arc — slow clockwise comet */}
       <svg
         className="ocr-spin-slow absolute inset-0 h-full w-full"
         viewBox="0 0 80 80"
@@ -514,7 +497,6 @@ function AiOrb({ preview }: { preview: string | null }) {
         />
       </svg>
 
-      {/* inner arc — faster counter-clockwise comet */}
       <svg
         className="absolute inset-2 h-[calc(100%-1rem)] w-[calc(100%-1rem)]"
         style={{ animation: "ocr-spin 2.6s linear infinite reverse" }}
@@ -545,8 +527,6 @@ function AiOrb({ preview }: { preview: string | null }) {
         />
       </svg>
 
-      {/* core \u2014 uploaded photo as a full crisp circle once we have one;
-          the blinking blurry glow is only for the icon fallback */}
       <div className="relative z-10 flex h-14 w-14 items-center justify-center overflow-hidden rounded-full">
         {preview ? (
           <img

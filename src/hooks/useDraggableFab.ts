@@ -31,21 +31,6 @@ function clampRectToViewport(rect: {
   };
 }
 
-/**
- * Lets the user drag the floating AI Vision widget away from its default
- * bottom-right corner — it can otherwise sit on top of a page's own submit
- * button. Ported from care_filly_fe's `useDraggableFab` (see that file for
- * the full design rationale), simplified since `userId` is already known
- * synchronously here via `useAuthUser` (no async user lookup needed).
- * Position is persisted per CARE user id so a shared/kiosk device doesn't
- * leak one person's dragged position into another user's session. A plain
- * click/tap still reaches the button underneath; dragging only kicks in
- * once the pointer has moved past a small threshold, and the resulting
- * click is suppressed. Double-click/tap or pressing and holding for ~2s
- * (LONG_PRESS_RESET_MS, with a ring filling in as visual feedback) resets
- * back to the default corner. The widget's on-screen rect is always
- * clamped to the viewport so it can never be dragged fully off-screen.
- */
 export function useDraggableFab(userId: string | null) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
