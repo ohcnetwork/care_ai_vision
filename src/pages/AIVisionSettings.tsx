@@ -1,4 +1,4 @@
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
 
@@ -55,7 +55,13 @@ export default function AIVisionSettings() {
     <div className="care-ai-vision-container mx-auto max-w-3xl py-8 px-4">
       <h1 className="text-2xl font-bold mb-6">{t("ai_vision_settings")}</h1>
 
-      {!isPermissionLoading && !hasPermission ? (
+      {isPermissionLoading ? (
+        <Card>
+          <CardContent className="flex justify-center py-5">
+            <Loader2 className="size-6 animate-spin text-gray-400" />
+          </CardContent>
+        </Card>
+      ) : !hasPermission ? (
         <Card>
           <CardContent className="py-5 text-sm text-muted-foreground">
             {t("no_permission_ai_vision")}
