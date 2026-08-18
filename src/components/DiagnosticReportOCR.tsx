@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -140,6 +141,7 @@ export default function DiagnosticReportOCR({
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
   const [queued, setQueued] = useState<QueuedFile[]>([]);
+  const [preview, setPreview] = useState<QueuedFile | null>(null);
   const [filledCount, setFilledCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -256,9 +258,7 @@ export default function DiagnosticReportOCR({
           existing.add(fileKey(file));
           next.push({
             file,
-            url: file.type.startsWith("image/")
-              ? URL.createObjectURL(file)
-              : null,
+            url: URL.createObjectURL(file),
           });
         }
         return next;
@@ -268,6 +268,7 @@ export default function DiagnosticReportOCR({
   );
 
   const removeAt = useCallback((index: number) => {
+    setPreview(null);
     setQueued((prev) => {
       const item = prev[index];
       if (item?.url) URL.revokeObjectURL(item.url);
@@ -309,6 +310,7 @@ export default function DiagnosticReportOCR({
     clearFillTimeouts();
     revokeAll(queuedRef.current);
     setQueued([]);
+    setPreview(null);
     setStatus("idle");
     setError("");
     setFilledCount(0);
@@ -339,17 +341,30 @@ export default function DiagnosticReportOCR({
               <div className="flex flex-wrap items-center gap-2">
                 {queued.map((item, i) => (
                   <div key={fileKey(item.file)} className="relative">
-                    {item.url ? (
-                      <img
-                        src={item.url}
-                        alt=""
-                        className="h-14 w-14 rounded object-cover"
-                      />
-                    ) : (
-                      <span className="flex h-14 w-14 items-center justify-center rounded bg-white text-blue-600">
-                        <FileText className="h-5 w-5" />
-                      </span>
-                    )}
+                    <button
+                      type="button"
+                      className="block"
+                      onClick={() => {
+                        if (!item.url) return;
+                        if (item.file.type.startsWith("image/")) {
+                          setPreview(item);
+                        } else {
+                          window.open(item.url, "_blank", "noopener");
+                        }
+                      }}
+                    >
+                      {item.file.type.startsWith("image/") && item.url ? (
+                        <img
+                          src={item.url}
+                          alt=""
+                          className="h-14 w-14 rounded object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-14 w-14 items-center justify-center rounded bg-white text-blue-600">
+                          <FileText className="h-5 w-5" />
+                        </span>
+                      )}
+                    </button>
                     <button
                       type="button"
                       onClick={() => removeAt(i)}
@@ -449,6 +464,30 @@ export default function DiagnosticReportOCR({
           </div>
         )}
       </div>
+      {preview?.url &&
+        createPortal(
+          <div className="care-ai-vision-container">
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+              onClick={() => setPreview(null)}
+            >
+              <button
+                type="button"
+                className="absolute top-4 right-4 rounded-full bg-white/90 p-1.5 text-gray-800"
+                onClick={() => setPreview(null)}
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <img
+                src={preview.url}
+                alt=""
+                className="max-h-[85vh] max-w-full rounded object-contain"
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -461,7 +500,7 @@ function PreviewStack({ queued }: { queued: QueuedFile[] }) {
   return (
     <div className="flex -space-x-2">
       {shown.map((item, i) =>
-        item.url ? (
+        item.file.type.startsWith("image/") && item.url ? (
           <img
             key={`${fileKey(item.file)}-${i}`}
             src={item.url}
