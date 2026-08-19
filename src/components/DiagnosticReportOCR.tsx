@@ -1,23 +1,28 @@
 import {
   AlertCircle,
-  Camera,
   CheckCircle2,
+  FileText,
   Loader2,
   RotateCcw,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { useAtomValue } from "jotai";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 import useAuthUser from "@/hooks/useAuthUser";
 import { useTranslation } from "@/hooks/useTranslation";
-import { extractLabResults } from "@/lib/ocr";
+import { extractLabResults, highlightLabObservation } from "@/lib/ocr";
 import { resolveFacilityIdFromPath } from "@/lib/facility";
 import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
 
-type Status = "idle" | "processing" | "success" | "error";
+type Status = "idle" | "processing" | "filling" | "success" | "error";
+
+const FIELD_FILL_DELAY_MS = 350;
 
 interface ObservationDefinition {
   id: string;
@@ -41,7 +46,28 @@ interface ExtractedResult {
   }[];
 }
 
-/** Looks up each definition's `<id>__value`/`<id>__unit` keys directly, no fuzzy matching. */
+interface FillStep {
+  apply: () => void;
+  highlight: () => void;
+}
+
+interface QueuedFile {
+  file: File;
+  url: string | null;
+}
+
+function isLabFile(file: File): boolean {
+  return (
+    file.type.startsWith("image/") ||
+    file.type === "application/pdf" ||
+    file.name.toLowerCase().endsWith(".pdf")
+  );
+}
+
+function fileKey(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
 function mapResults(
   result: Record<string, unknown>,
   definitions: ObservationDefinition[],
@@ -104,39 +130,6 @@ export default function DiagnosticReportOCR({
   handleUnitChange: (definitionId: string, index: number, unit: string) => void;
   disabled?: boolean;
 }) {
-  const onExtracted = useCallback(
-    (
-      results: {
-        definitionId: string;
-        values: {
-          value: string;
-          unit?: string;
-          componentCode?: string;
-        }[];
-      }[],
-    ) => {
-      for (const result of results) {
-        for (const val of result.values) {
-          if (val.componentCode) {
-            handleComponentValueChange(
-              result.definitionId,
-              0,
-              val.componentCode,
-              val.value,
-              val.unit || "",
-            );
-          } else {
-            handleValueChange(result.definitionId, 0, val.value);
-            if (val.unit) {
-              handleUnitChange(result.definitionId, 0, val.unit);
-            }
-          }
-        }
-      }
-    },
-    [handleComponentValueChange, handleValueChange, handleUnitChange],
-  );
-
   const { t } = useTranslation();
   const user = useAuthUser();
   const enabledAtom = useMemo(
@@ -147,104 +140,306 @@ export default function DiagnosticReportOCR({
 
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
-  const [preview, setPreview] = useState<string | null>(null);
+  const [queued, setQueued] = useState<QueuedFile[]>([]);
+  const [preview, setPreview] = useState<QueuedFile | null>(null);
   const [filledCount, setFilledCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fillTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const queuedRef = useRef(queued);
+  queuedRef.current = queued;
 
-  const handleFile = useCallback(
-    async (file: File) => {
-      setStatus("processing");
-      setError("");
-      setPreview(URL.createObjectURL(file));
+  const clearFillTimeouts = () => {
+    fillTimeoutsRef.current.forEach(clearTimeout);
+    fillTimeoutsRef.current = [];
+  };
 
-      try {
-        const labResults = await extractLabResults(
-          file,
-          observationDefinitions,
-          resolveFacilityIdFromPath(),
-        );
-        const mapped = mapResults(labResults, observationDefinitions);
-        onExtracted(mapped);
+  useEffect(() => clearFillTimeouts, []);
 
-        const totalValues = mapped.reduce((s, r) => s + r.values.length, 0);
-        setFilledCount(totalValues);
-        setStatus("success");
-      } catch (err) {
-        setError(err instanceof Error ? err.message : t("extraction_failed"));
-        setStatus("error");
+  useEffect(() => {
+    return () => {
+      queuedRef.current.forEach((item) => {
+        if (item.url) URL.revokeObjectURL(item.url);
+      });
+    };
+  }, []);
+
+  const revokeAll = (items: QueuedFile[]) => {
+    items.forEach((item) => {
+      if (item.url) URL.revokeObjectURL(item.url);
+    });
+  };
+
+  const buildFillSteps = useCallback(
+    (mapped: ExtractedResult[]): FillStep[] => {
+      const steps: FillStep[] = [];
+      const byId = new Map(
+        observationDefinitions.map((d) => [d.id, d] as const),
+      );
+
+      for (const result of mapped) {
+        const def = byId.get(result.definitionId);
+        for (const val of result.values) {
+          if (val.componentCode) {
+            steps.push({
+              apply: () =>
+                handleComponentValueChange(
+                  result.definitionId,
+                  0,
+                  val.componentCode!,
+                  val.value,
+                  val.unit || "",
+                ),
+              highlight: () =>
+                def && highlightLabObservation(def, "value", val.componentCode),
+            });
+            continue;
+          }
+          steps.push({
+            apply: () => handleValueChange(result.definitionId, 0, val.value),
+            highlight: () => def && highlightLabObservation(def, "value"),
+          });
+          if (val.unit) {
+            steps.push({
+              apply: () => handleUnitChange(result.definitionId, 0, val.unit!),
+              highlight: () => def && highlightLabObservation(def, "unit"),
+            });
+          }
+        }
       }
+      return steps;
     },
-    [observationDefinitions, onExtracted, t],
+    [
+      observationDefinitions,
+      handleComponentValueChange,
+      handleValueChange,
+      handleUnitChange,
+    ],
   );
 
-  const handleInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) handleFile(file);
+  const runFillAnimation = useCallback((steps: FillStep[]) => {
+    clearFillTimeouts();
+    setFilledCount(0);
+    setTotalCount(steps.length);
+
+    if (steps.length === 0) {
+      setStatus("success");
+      return;
+    }
+
+    setStatus("filling");
+    steps.forEach((step, index) => {
+      const timeoutId = setTimeout(() => {
+        step.apply();
+        requestAnimationFrame(() => step.highlight());
+        setFilledCount(index + 1);
+        if (index === steps.length - 1) setStatus("success");
+      }, index * FIELD_FILL_DELAY_MS);
+      fillTimeoutsRef.current.push(timeoutId);
+    });
+  }, []);
+
+  const appendFiles = useCallback(
+    (files: File[]) => {
+      const accepted = files.filter(isLabFile);
+      if (!accepted.length) {
+        setError(t("upload_image_error"));
+        setStatus("error");
+        return;
+      }
+
+      setError("");
+      setStatus("idle");
+      setQueued((prev) => {
+        const existing = new Set(prev.map((item) => fileKey(item.file)));
+        const next = [...prev];
+        for (const file of accepted) {
+          if (existing.has(fileKey(file))) continue;
+          existing.add(fileKey(file));
+          next.push({
+            file,
+            url: URL.createObjectURL(file),
+          });
+        }
+        return next;
+      });
     },
-    [handleFile],
+    [t],
   );
+
+  const removeAt = useCallback((index: number) => {
+    setPreview(null);
+    setQueued((prev) => {
+      const item = prev[index];
+      if (item?.url) URL.revokeObjectURL(item.url);
+      return prev.filter((_, i) => i !== index);
+    });
+  }, []);
+
+  const extract = useCallback(async () => {
+    const files = queuedRef.current.map((item) => item.file);
+    if (!files.length) return;
+
+    clearFillTimeouts();
+    setStatus("processing");
+    setError("");
+    setFilledCount(0);
+    setTotalCount(0);
+
+    try {
+      const labResults = await extractLabResults(
+        files,
+        observationDefinitions,
+        resolveFacilityIdFromPath(),
+      );
+      const mapped = mapResults(labResults, observationDefinitions);
+      runFillAnimation(buildFillSteps(mapped));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("extraction_failed"));
+      setStatus("error");
+    }
+  }, [observationDefinitions, t, buildFillSteps, runFillAnimation]);
+
+  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = [...(e.target.files ?? [])];
+    if (files.length) appendFiles(files);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
 
   const reset = useCallback(() => {
+    clearFillTimeouts();
+    revokeAll(queuedRef.current);
+    setQueued([]);
+    setPreview(null);
     setStatus("idle");
     setError("");
-    setPreview(null);
     setFilledCount(0);
+    setTotalCount(0);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
   if (disabled || !enabled) return null;
 
+  const staging = status === "idle" || status === "error";
+  const busy = status === "processing" || status === "filling";
+
   return (
     <div className="care-ai-vision-container">
-      <div className="w-full">
+      <div className="w-full space-y-2">
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
-          capture="environment"
+          accept="image/*,.pdf,application/pdf"
+          multiple
           className="hidden"
-          onChange={handleInputChange}
+          onChange={onInputChange}
         />
 
-        {status === "idle" && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Camera className="h-4 w-4" />
-            {t("scan_lab_report")}
-          </Button>
+        {staging && (
+          <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3 space-y-3">
+            {queued.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                {queued.map((item, i) => (
+                  <div key={fileKey(item.file)} className="relative">
+                    <button
+                      type="button"
+                      className="block"
+                      onClick={() => {
+                        if (!item.url) return;
+                        if (item.file.type.startsWith("image/")) {
+                          setPreview(item);
+                        } else {
+                          window.open(item.url, "_blank", "noopener");
+                        }
+                      }}
+                    >
+                      {item.file.type.startsWith("image/") && item.url ? (
+                        <img
+                          src={item.url}
+                          alt=""
+                          className="h-14 w-14 rounded object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-14 w-14 items-center justify-center rounded bg-white text-blue-600">
+                          <FileText className="h-5 w-5" />
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeAt(i)}
+                      className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-gray-800 text-white"
+                      title={t("remove_page")}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                <span className="text-xs font-medium text-blue-700">
+                  {t("queued_pages", { count: queued.length })}
+                </span>
+              </div>
+            )}
+
+            {status === "error" && (
+              <div className="flex items-center gap-2 text-sm text-red-600">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {error}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <FileText className="h-4 w-4" />
+                {queued.length ? t("add_another") : t("choose_file")}
+              </Button>
+              {queued.length > 0 && (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="gap-2 bg-blue-600 text-white hover:bg-blue-700"
+                  onClick={extract}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {t("extract")}
+                </Button>
+              )}
+              {queued.length > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={reset}
+                  className="text-gray-500"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          </div>
         )}
 
-        {status === "processing" && (
+        {busy && (
           <div className="flex items-center gap-3 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
-            {preview && (
-              <img
-                src={preview}
-                alt="Lab report preview"
-                className="h-12 w-12 rounded object-cover"
-              />
-            )}
+            <PreviewStack queued={queued} />
             <div className="flex items-center gap-2 text-sm text-blue-700">
               <Loader2 className="h-4 w-4 animate-spin" />
-              {t("extracting_lab_results")}
+              {status === "processing"
+                ? t("extracting_lab_results")
+                : t("filling_fields", { count: totalCount })}
             </div>
           </div>
         )}
 
         {status === "success" && (
           <div className="flex items-center gap-3 rounded-lg border border-green-100 bg-green-50/50 p-3">
-            {preview && (
-              <img
-                src={preview}
-                alt="Lab report preview"
-                className="h-12 w-12 rounded object-cover"
-              />
-            )}
+            <PreviewStack queued={queued} />
             <div className="flex flex-1 items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
               <span className="text-sm text-green-700">
@@ -268,23 +463,64 @@ export default function DiagnosticReportOCR({
             </Button>
           </div>
         )}
-
-        {status === "error" && (
-          <div className="flex items-center gap-3 rounded-lg border border-red-100 bg-red-50/50 p-3">
-            <AlertCircle className="h-4 w-4 text-red-500" />
-            <span className="flex-1 text-sm text-red-600">{error}</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={reset}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        )}
       </div>
+      {preview?.url &&
+        createPortal(
+          <div className="care-ai-vision-container">
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+              onClick={() => setPreview(null)}
+            >
+              <button
+                type="button"
+                className="absolute top-4 right-4 rounded-full bg-white/90 p-1.5 text-gray-800"
+                onClick={() => setPreview(null)}
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <img
+                src={preview.url}
+                alt=""
+                className="max-h-[85vh] max-w-full rounded object-contain"
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+function PreviewStack({ queued }: { queued: QueuedFile[] }) {
+  if (!queued.length) return null;
+  const shown = queued.slice(0, 3);
+  const extra = queued.length - shown.length;
+
+  return (
+    <div className="flex -space-x-2">
+      {shown.map((item, i) =>
+        item.file.type.startsWith("image/") && item.url ? (
+          <img
+            key={`${fileKey(item.file)}-${i}`}
+            src={item.url}
+            alt=""
+            className="h-12 w-12 rounded border border-white object-cover"
+          />
+        ) : (
+          <span
+            key={`${fileKey(item.file)}-${i}`}
+            className="flex h-12 w-12 items-center justify-center rounded border border-white bg-white text-blue-600"
+          >
+            <FileText className="h-5 w-5" />
+          </span>
+        ),
+      )}
+      {extra > 0 && (
+        <span className="flex h-12 w-12 items-center justify-center rounded border border-white bg-blue-100 text-xs font-semibold text-blue-700">
+          +{extra}
+        </span>
+      )}
     </div>
   );
 }

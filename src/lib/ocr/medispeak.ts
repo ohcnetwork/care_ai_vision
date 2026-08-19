@@ -196,9 +196,8 @@ export async function pollMedispeakFormResult(
   }: {
     intervalMs?: number;
     maxAttempts?: number;
-    /** Called with the document's raw OCR'd text as soon as Medispeak has
-     * it — this typically arrives well before the structured "form"
-     * output, while the session is still `processing`. */
+    /** Called with the document's raw OCR'd text as soon as it's available,
+     * usually before the structured "form" output finishes. */
     onTranscript?: (text: string) => void;
   } = {},
 ): Promise<Record<string, unknown>> {
@@ -239,14 +238,20 @@ export async function pollMedispeakFormResult(
   throw new Error("Medispeak session timed out waiting for a result");
 }
 
-/** Runs one image through the document/OCR pipeline end-to-end. */
+/** Runs one or more images/PDFs through the document/OCR pipeline. */
 export async function runMedispeakOcr(
-  file: File,
+  files: File | File[],
   params: CreateParams,
   options?: { onTranscript?: (text: string) => void },
 ): Promise<Record<string, unknown>> {
+  const documents = Array.isArray(files) ? files : [files];
+  if (!documents.length) {
+    throw new Error("No documents to upload");
+  }
   const handle = await createMedispeakDocumentSession(params);
-  await uploadMedispeakDocument(handle, file);
+  for (const file of documents) {
+    await uploadMedispeakDocument(handle, file);
+  }
   await commitMedispeakSession(handle);
   return pollMedispeakFormResult(handle, options);
 }

@@ -1,4 +1,4 @@
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
 
@@ -13,6 +13,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 
 import useAuthUser from "@/hooks/useAuthUser";
+import { useHasFacilityPermission } from "@/hooks/useFacilityPermission";
 import { useTranslation } from "@/hooks/useTranslation";
 import {
   aiVisionEnabledAtomFor,
@@ -24,6 +25,8 @@ import {
 export default function AIVisionSettings() {
   const { t } = useTranslation();
   const user = useAuthUser();
+  const { hasPermission, isLoading: isPermissionLoading } =
+    useHasFacilityPermission("can_use_filly");
   const enabledAtom = useMemo(
     () => aiVisionEnabledAtomFor(user.id ?? user.username),
     [user.id, user.username],
@@ -49,10 +52,22 @@ export default function AIVisionSettings() {
   );
 
   return (
-    <div className="care-ai-vision-container">
-      <div className="container mx-auto max-w-2xl py-8 px-4">
-        <h1 className="text-2xl font-bold mb-6">{t("ai_vision_settings")}</h1>
+    <div className="care-ai-vision-container mx-auto max-w-3xl py-8 px-4">
+      <h1 className="text-2xl font-bold mb-6">{t("ai_vision_settings")}</h1>
 
+      {isPermissionLoading ? (
+        <Card>
+          <CardContent className="flex justify-center py-5">
+            <Loader2 className="size-6 animate-spin text-gray-400" />
+          </CardContent>
+        </Card>
+      ) : !hasPermission ? (
+        <Card>
+          <CardContent className="py-5 text-sm text-muted-foreground">
+            {t("no_permission_ai_vision")}
+          </CardContent>
+        </Card>
+      ) : (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -83,7 +98,7 @@ export default function AIVisionSettings() {
             <Switch checked={enabled} onCheckedChange={handleToggle} />
           </CardContent>
         </Card>
-      </div>
+      )}
     </div>
   );
 }
