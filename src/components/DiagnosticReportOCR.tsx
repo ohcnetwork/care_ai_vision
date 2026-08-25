@@ -15,6 +15,7 @@ import useAuthUser from "@/hooks/useAuthUser";
 import { useTranslation } from "@/hooks/useTranslation";
 import { uploadDiagnosticReportFile } from "@/lib/files";
 import { extractLabResultsViaEka } from "@/lib/ocr";
+import { resolveDiagnosticReportContext } from "@/lib/service-request";
 import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
 
 type Status = "idle" | "processing" | "success" | "error";
@@ -120,20 +121,12 @@ function mapResults(
 }
 
 export default function DiagnosticReportOCR({
-  patientId,
-  patientName,
-  reportId,
-  testName,
   observationDefinitions,
   handleComponentValueChange,
   handleValueChange,
   handleUnitChange,
   disabled,
 }: {
-  patientId: string;
-  patientName: string;
-  reportId: string;
-  testName: string;
   observationDefinitions: ObservationDefinition[];
   handleComponentValueChange: (
     definitionId: string,
@@ -204,7 +197,15 @@ export default function DiagnosticReportOCR({
       setPreview(URL.createObjectURL(file));
 
       try {
-        const labResults = await extractLabResultsViaEka(file, patientId);
+        const context = await resolveDiagnosticReportContext();
+        if (!context) {
+          throw new Error(t("extraction_failed"));
+        }
+
+        const labResults: LabResult[] = await extractLabResultsViaEka(
+          file,
+          context.patientId,
+        );
         const mapped = mapResults(labResults, observationDefinitions);
         onExtracted(mapped);
 
@@ -213,24 +214,17 @@ export default function DiagnosticReportOCR({
         setStatus("success");
 
         // Only keep the scan once the form has actually been filled from it.
-        const displayName = `${patientName} - ${testName}`;
-        uploadDiagnosticReportFile(file, reportId, displayName).catch((err) =>
-          console.error("Failed to attach scanned file to report", err),
+        const displayName = `${context.patientName} - ${context.testName}`;
+        uploadDiagnosticReportFile(file, context.reportId, displayName).catch(
+          (err) =>
+            console.error("Failed to attach scanned file to report", err),
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : t("extraction_failed"));
         setStatus("error");
       }
     },
-    [
-      observationDefinitions,
-      onExtracted,
-      patientId,
-      patientName,
-      reportId,
-      testName,
-      t,
-    ],
+    [observationDefinitions, onExtracted, t],
   );
 
   const handleInputChange = useCallback(
