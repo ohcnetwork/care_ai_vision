@@ -28,20 +28,20 @@ export async function extractDataFromImage(
   imageFile: File,
 ): Promise<ExtractedData> {
   const url = new URL("/api/care_ai/ask/", window.CARE_API_URL);
-  
+
   // Create FormData for multipart upload
   const formData = new FormData();
-  
+
   // Add the extraction prompt as 'prompt' field
   formData.append("prompt", EXTRACTION_PROMPT);
-  
+
   // Append the actual File object directly
   formData.append("images", imageFile);
-  
+
   // Get auth headers (without Content-Type, let browser set it for multipart)
   const headers = getHeaders();
   headers.delete("Content-Type"); // Let browser set boundary for multipart/form-data
-  
+
   const res = await fetch(url.toString(), {
     method: "POST",
     headers,
@@ -117,18 +117,18 @@ export async function extractLabResults<T>(
   prompt: string,
 ): Promise<T> {
   const url = new URL("/api/care_ai/ask/", window.CARE_API_URL);
-  
+
   const formData = new FormData();
-  
+
   // Add the lab extraction prompt as 'prompt' field
   formData.append("prompt", prompt);
-  
+
   // Append the actual File object directly
   formData.append("images", imageFile);
-  
+
   const headers = getHeaders();
   headers.delete("Content-Type");
-  
+
   const res = await fetch(url.toString(), {
     method: "POST",
     headers,
@@ -149,4 +149,43 @@ export async function extractLabResults<T>(
     .trim();
 
   return JSON.parse(cleaned) as T;
+}
+
+export interface EkaLabResult {
+  test_name: string;
+  value: string;
+  unit?: string;
+}
+
+/**
+ * Parse a lab report via eka.care (presigned upload + structured vitals), scoped to a patient.
+ * @param file - The lab report image/PDF to upload
+ * @param patientId - CARE patient external_id, forwarded to eka.care as the record owner
+ */
+export async function extractLabResultsViaEka(
+  file: File,
+  patientId: string,
+): Promise<EkaLabResult[]> {
+  const url = new URL("/api/care_ai/eka/lab-report/", window.CARE_API_URL);
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("patient", patientId);
+
+  const headers = getHeaders();
+  headers.delete("Content-Type");
+
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => null);
+    throw new Error(errorBody?.detail ?? `eka.care API error: ${res.status}`);
+  }
+
+  const json = await res.json();
+  return (json?.result ?? []) as EkaLabResult[];
 }

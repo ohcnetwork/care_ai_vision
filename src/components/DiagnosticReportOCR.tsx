@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
 
 import useAuthUser from "@/hooks/useAuthUser";
 import { useTranslation } from "@/hooks/useTranslation";
-import { extractLabResults, buildLabResultsPrompt } from "@/lib/ocr";
+import { uploadDiagnosticReportFile } from "@/lib/files";
+import { extractLabResultsViaEka } from "@/lib/ocr";
 import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
 
 type Status = "idle" | "processing" | "success" | "error";
@@ -44,7 +45,6 @@ interface LabResult {
   test_name: string;
   value: string;
   unit?: string;
-  components?: { name: string; value: string; unit?: string }[];
 }
 
 function fuzzyMatch(extracted: string, candidate: string): boolean {
@@ -53,16 +53,39 @@ function fuzzyMatch(extracted: string, candidate: string): boolean {
   return a === b || a.includes(b) || b.includes(a);
 }
 
+type DefinitionMatch =
+  | { definitionId: string; componentCode?: undefined }
+  | { definitionId: string; componentCode: string };
+
+/**
+ * eka.care returns each analyte (e.g. "WBC") as its own flat result, but CARE
+ * often models a panel (e.g. "Complete Blood Count") as a single definition
+ * with those analytes as components. Try a direct definition match first,
+ * then fall back to matching against every definition's components.
+ */
 function matchDefinition(
   testName: string,
   definitions: ObservationDefinition[],
-): ObservationDefinition | undefined {
-  return definitions.find((d) => {
+): DefinitionMatch | undefined {
+  for (const d of definitions) {
     const candidates = [d.title, d.code?.display, d.code?.code].filter(
       Boolean,
     ) as string[];
-    return candidates.some((c) => fuzzyMatch(testName, c));
-  });
+    if (candidates.some((c) => fuzzyMatch(testName, c))) {
+      return { definitionId: d.id };
+    }
+  }
+
+  for (const d of definitions) {
+    const match = d.component?.find((c) =>
+      fuzzyMatch(testName, c.code.display || c.code.code),
+    );
+    if (match) {
+      return { definitionId: d.id, componentCode: match.code.code };
+    }
+  }
+
+  return undefined;
 }
 
 function mapResults(
@@ -72,45 +95,45 @@ function mapResults(
   const results: ExtractedResult[] = [];
 
   for (const lr of labResults) {
-    const def = matchDefinition(lr.test_name, definitions);
-    if (!def) continue;
-
-    if (lr.components?.length && def.component?.length) {
-      const values = lr.components
-        .map((comp) => {
-          const matchedComp = def.component!.find((dc) =>
-            fuzzyMatch(comp.name, dc.code.display || dc.code.code),
-          );
-          if (!matchedComp) return null;
-          return {
-            value: comp.value,
-            unit: comp.unit,
-            componentCode: matchedComp.code.code,
-          };
-        })
-        .filter(Boolean) as ExtractedResult["values"];
-
-      if (values.length) {
-        results.push({ definitionId: def.id, values });
-      }
-    } else {
-      results.push({
-        definitionId: def.id,
-        values: [{ value: lr.value, unit: lr.unit }],
-      });
+    const match = matchDefinition(lr.test_name, definitions);
+    if (!match) {
+      console.warn(
+        `eka.care result "${lr.test_name}" did not match any observation definition`,
+        definitions.map((d) => d.title || d.code?.display || d.code?.code),
+      );
+      continue;
     }
+
+    results.push({
+      definitionId: match.definitionId,
+      values: [
+        {
+          value: lr.value,
+          unit: lr.unit,
+          componentCode: match.componentCode,
+        },
+      ],
+    });
   }
 
   return results;
 }
 
 export default function DiagnosticReportOCR({
+  patientId,
+  patientName,
+  reportId,
+  testName,
   observationDefinitions,
   handleComponentValueChange,
   handleValueChange,
   handleUnitChange,
   disabled,
 }: {
+  patientId: string;
+  patientName: string;
+  reportId: string;
+  testName: string;
   observationDefinitions: ObservationDefinition[];
   handleComponentValueChange: (
     definitionId: string,
@@ -181,21 +204,33 @@ export default function DiagnosticReportOCR({
       setPreview(URL.createObjectURL(file));
 
       try {
-        // Send the File object directly to the API
-        const prompt = buildLabResultsPrompt(observationDefinitions);
-        const labResults = await extractLabResults<LabResult[]>(file, prompt);
+        const labResults = await extractLabResultsViaEka(file, patientId);
         const mapped = mapResults(labResults, observationDefinitions);
         onExtracted(mapped);
 
         const totalValues = mapped.reduce((s, r) => s + r.values.length, 0);
         setFilledCount(totalValues);
         setStatus("success");
+
+        // Only keep the scan once the form has actually been filled from it.
+        const displayName = `${patientName} - ${testName}`;
+        uploadDiagnosticReportFile(file, reportId, displayName).catch((err) =>
+          console.error("Failed to attach scanned file to report", err),
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : t("extraction_failed"));
         setStatus("error");
       }
     },
-    [observationDefinitions, onExtracted, t],
+    [
+      observationDefinitions,
+      onExtracted,
+      patientId,
+      patientName,
+      reportId,
+      testName,
+      t,
+    ],
   );
 
   const handleInputChange = useCallback(
@@ -221,7 +256,7 @@ export default function DiagnosticReportOCR({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,application/pdf"
         capture="environment"
         className="hidden"
         onChange={handleInputChange}
