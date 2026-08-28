@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useAtomValue } from "jotai";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import useAuthUser from "@/hooks/useAuthUser";
 import { useTranslation } from "@/hooks/useTranslation";
 import { uploadDiagnosticReportFile } from "@/lib/files";
-import { extractLabResultsViaEka } from "@/lib/ocr";
+import { extractLabResultsViaEka, matchLabResultsWithAI } from "@/lib/ocr";
 import { resolveDiagnosticReportContext } from "@/lib/service-request";
 import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
 
@@ -23,8 +24,8 @@ type Status = "idle" | "processing" | "success" | "error";
 interface ObservationDefinition {
   id: string;
   title?: string;
-  code?: { code: string; display?: string };
-  component?: { code: { code: string; display?: string } }[];
+  code?: { code: string; display?: string; system?: string };
+  component?: { code: { code: string; display?: string; system?: string } }[];
   permitted_unit?: {
     code: string;
     display?: string;
@@ -46,11 +47,18 @@ interface LabResult {
   test_name: string;
   value: string;
   unit?: string;
+  loinc_code?: string;
+}
+
+const LOINC_SYSTEM = "http://loinc.org";
+
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function fuzzyMatch(extracted: string, candidate: string): boolean {
-  const a = extracted.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const b = candidate.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const a = normalize(extracted);
+  const b = normalize(candidate);
   return a === b || a.includes(b) || b.includes(a);
 }
 
@@ -61,13 +69,34 @@ type DefinitionMatch =
 /**
  * eka.care returns each analyte (e.g. "WBC") as its own flat result, but CARE
  * often models a panel (e.g. "Complete Blood Count") as a single definition
- * with those analytes as components. Try a direct definition match first,
- * then fall back to matching against every definition's components.
+ * with those analytes as components. Prefer an exact LOINC code match (far
+ * more reliable than text), then fall back to fuzzy name/code matching
+ * against definitions and their components. Abbreviation-vs-full-name
+ * mismatches (e.g. "HGB" vs "Hemoglobin") that this can't resolve are left
+ * for the AI-based fallback matcher rather than hardcoded here, since the
+ * set of possible tests/panels isn't fixed.
  */
 function matchDefinition(
   testName: string,
   definitions: ObservationDefinition[],
+  loincCode?: string,
 ): DefinitionMatch | undefined {
+  if (loincCode) {
+    for (const d of definitions) {
+      if (d.code?.system === LOINC_SYSTEM && d.code.code === loincCode) {
+        return { definitionId: d.id };
+      }
+    }
+    for (const d of definitions) {
+      const match = d.component?.find(
+        (c) => c.code.system === LOINC_SYSTEM && c.code.code === loincCode,
+      );
+      if (match) {
+        return { definitionId: d.id, componentCode: match.code.code };
+      }
+    }
+  }
+
   for (const d of definitions) {
     const candidates = [d.title, d.code?.display, d.code?.code].filter(
       Boolean,
@@ -92,16 +121,14 @@ function matchDefinition(
 function mapResults(
   labResults: LabResult[],
   definitions: ObservationDefinition[],
-): ExtractedResult[] {
+): { results: ExtractedResult[]; unmatched: LabResult[] } {
   const results: ExtractedResult[] = [];
+  const unmatched: LabResult[] = [];
 
   for (const lr of labResults) {
-    const match = matchDefinition(lr.test_name, definitions);
+    const match = matchDefinition(lr.test_name, definitions, lr.loinc_code);
     if (!match) {
-      console.warn(
-        `eka.care result "${lr.test_name}" did not match any observation definition`,
-        definitions.map((d) => d.title || d.code?.display || d.code?.code),
-      );
+      unmatched.push(lr);
       continue;
     }
 
@@ -117,7 +144,7 @@ function mapResults(
     });
   }
 
-  return results;
+  return { results, unmatched };
 }
 
 export default function DiagnosticReportOCR({
@@ -178,6 +205,7 @@ export default function DiagnosticReportOCR({
 
   const { t } = useTranslation();
   const user = useAuthUser();
+  const queryClient = useQueryClient();
   const enabledAtom = useMemo(
     () => aiVisionEnabledAtomFor(user.id ?? user.username),
     [user.id, user.username],
@@ -206,7 +234,36 @@ export default function DiagnosticReportOCR({
           file,
           context.patientId,
         );
-        const mapped = mapResults(labResults, observationDefinitions);
+        const { results: mapped, unmatched } = mapResults(
+          labResults,
+          observationDefinitions,
+        );
+
+        if (unmatched.length > 0) {
+          try {
+            const aiMatches = await matchLabResultsWithAI(
+              unmatched,
+              observationDefinitions,
+            );
+            for (const m of aiMatches) {
+              const source = unmatched.find((u) => u.test_name === m.test_name);
+              if (!source) continue;
+              mapped.push({
+                definitionId: m.definition_id,
+                values: [
+                  {
+                    value: source.value,
+                    unit: source.unit,
+                    componentCode: m.component_code,
+                  },
+                ],
+              });
+            }
+          } catch (err) {
+            console.error("AI lab result matching failed", err);
+          }
+        }
+
         onExtracted(mapped);
 
         const totalValues = mapped.reduce((s, r) => s + r.values.length, 0);
@@ -215,16 +272,21 @@ export default function DiagnosticReportOCR({
 
         // Only keep the scan once the form has actually been filled from it.
         const displayName = `${context.patientName} - ${context.testName}`;
-        uploadDiagnosticReportFile(file, context.reportId, displayName).catch(
-          (err) =>
+        uploadDiagnosticReportFile(file, context.reportId, displayName)
+          .then(() =>
+            queryClient.invalidateQueries({
+              queryKey: ["files", "diagnostic_report", context.reportId],
+            }),
+          )
+          .catch((err) =>
             console.error("Failed to attach scanned file to report", err),
-        );
+          );
       } catch (err) {
         setError(err instanceof Error ? err.message : t("extraction_failed"));
         setStatus("error");
       }
     },
-    [observationDefinitions, onExtracted, t],
+    [observationDefinitions, onExtracted, t, queryClient],
   );
 
   const handleInputChange = useCallback(
