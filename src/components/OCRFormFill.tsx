@@ -6,10 +6,10 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { useAtomValue } from "jotai";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { useAiVisionEnabled } from "@/hooks/useAiVisionEnabled";
 import useAuthUser from "@/hooks/useAuthUser";
 import { useDraggableFab } from "@/hooks/useDraggableFab";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -23,7 +23,6 @@ import {
   normalizePincode,
   resolveGeoOrganization,
 } from "@/lib/ocr";
-import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
 
 type Status = "idle" | "processing" | "filling" | "success" | "error";
 
@@ -58,11 +57,7 @@ export default function OCRFormFill({
 }) {
   const { t } = useTranslation();
   const user = useAuthUser();
-  const enabledAtom = useMemo(
-    () => aiVisionEnabledAtomFor(user.id ?? user.username),
-    [user.id, user.username],
-  );
-  const enabled = useAtomValue(enabledAtom);
+  const { enabled } = useAiVisionEnabled();
 
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");

@@ -1,7 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-
 import { resolveFacilityIdFromPath } from "@/lib/facility";
 import { apiRoutes, HttpMethod, query } from "@/lib/request";
+import { useQuery } from "@tanstack/react-query";
 
 interface FacilityPermissions {
   permissions: string[];
