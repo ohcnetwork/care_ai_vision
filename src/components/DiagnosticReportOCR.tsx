@@ -461,6 +461,7 @@ export default function DiagnosticReportOCR({
           type="file"
           accept="image/*"
           capture="environment"
+          multiple
           className="hidden"
           onChange={onInputChange}
         />
