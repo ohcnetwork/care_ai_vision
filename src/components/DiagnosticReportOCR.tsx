@@ -562,6 +562,16 @@ export default function DiagnosticReportOCR({
                 type="button"
                 variant="white"
                 size="sm"
+                className="h-10 gap-2 md:hidden"
+                onClick={() => cameraInputRef.current?.click()}
+              >
+                <Camera className="h-4 w-4" />
+                {t("take_photo")}
+              </Button>
+              <Button
+                type="button"
+                variant="white"
+                size="sm"
                 className="h-10 gap-2"
                 onClick={() => fileInputRef.current?.click()}
               >
