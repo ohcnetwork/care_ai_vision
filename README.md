@@ -34,6 +34,8 @@ Set the Medispeak API root, either:
 - `MEDISPEAK_API_URL` in this plugin's config in CARE (Admin → plugins) — no rebuild needed, or
 - `REACT_MEDISPEAK_API_URL` in `.env` for local development (requires a rebuild)
 
+Lab values below `LOW_CONFIDENCE_THRESHOLD` (plugin config) or `REACT_LOW_CONFIDENCE_THRESHOLD` (`.env`) are marked **Check this**. Default is `0.99`. Use `0.99` or `99`.
+
 > care_filly holds the `MEDISPEAK_API_KEY` account secret and mints short-lived, session-scoped tokens. This plugin only ever talks to Medispeak with those scoped tokens.
 
 ### Development

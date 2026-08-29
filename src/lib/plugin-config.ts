@@ -12,7 +12,10 @@
  *   {
  *     "url": "http://localhost:10123/assets/remoteEntry.js",
  *     "name": "care_ai_vision_fe",
- *     "config": { "MEDISPEAK_API_URL": "https://api.medispeak.example/api/v2" }
+ *     "config": {
+ *       "MEDISPEAK_API_URL": "https://api.medispeak.example/api/v2",
+ *       "LOW_CONFIDENCE_THRESHOLD": "0.99"
+ *     }
  *   }
  *
  * Values read this way are resolved at call time, never at module scope:
@@ -43,6 +46,9 @@ const PLUGIN_ALIASES = ["care_ai_vision_fe", "care-ai-vision-fe"];
 
 function readFrom(entry: PlugConfigMeta | undefined, key: string) {
   const value = entry?.config?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
@@ -70,4 +76,35 @@ export function readPluginConfig(key: string): string | undefined {
     if (found) return found;
   }
   return undefined;
+}
+
+const DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.99;
+
+function parseUnitInterval(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  const unit = n > 1 && n <= 100 ? n / 100 : n;
+  if (unit < 0 || unit > 1) return undefined;
+  return unit;
+}
+
+/**
+ * Score below which a filled lab value is marked "Check this".
+ * `0.99` means only 99%+ is trusted. Resolved at call time:
+ *
+ *   1. `LOW_CONFIDENCE_THRESHOLD` in this plugin's CARE config
+ *   2. `REACT_LOW_CONFIDENCE_THRESHOLD` at build time (local `.env`)
+ *
+ * Accepts `0.99` or `99`.
+ */
+export function readLowConfidenceThreshold(): number {
+  return (
+    parseUnitInterval(readPluginConfig("LOW_CONFIDENCE_THRESHOLD")) ??
+    parseUnitInterval(readPluginConfig("REACT_LOW_CONFIDENCE_THRESHOLD")) ??
+    parseUnitInterval(
+      (import.meta.env.REACT_LOW_CONFIDENCE_THRESHOLD || "").toString(),
+    ) ??
+    DEFAULT_LOW_CONFIDENCE_THRESHOLD
+  );
 }

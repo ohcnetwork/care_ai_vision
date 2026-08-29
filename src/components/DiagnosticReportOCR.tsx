@@ -30,12 +30,12 @@ import {
   persistLabObservationMark,
   type FillMark,
 } from "@/lib/ocr";
+import { readLowConfidenceThreshold } from "@/lib/plugin-config";
 import { resolveDiagnosticReportContext } from "@/lib/service-request";
 
 type Status = "idle" | "processing" | "filling" | "success" | "error";
 
 const FIELD_FILL_DELAY_MS = 350;
-const LOW_CONFIDENCE_THRESHOLD = 0.95;
 const EXTRACTION_MESSAGE_KEYS = [
   "extracting_information",
   "autofilling_fields",
@@ -240,7 +240,8 @@ export default function DiagnosticReportOCR({
         const def = byId.get(result.definitionId);
         for (const val of result.values) {
           const mark: FillMark =
-            val.confidence != null && val.confidence < LOW_CONFIDENCE_THRESHOLD
+            val.confidence != null &&
+            val.confidence < readLowConfidenceThreshold()
               ? "check_this"
               : "autofilled";
           if (val.componentCode) {
@@ -378,7 +379,7 @@ export default function DiagnosticReportOCR({
             item.values.filter(
               (val) =>
                 val.confidence != null &&
-                val.confidence < LOW_CONFIDENCE_THRESHOLD,
+                val.confidence < readLowConfidenceThreshold(),
             ).length,
           0,
         ),
