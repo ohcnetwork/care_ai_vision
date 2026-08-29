@@ -1,4 +1,4 @@
-import { AlertCircle, Check, ChevronDown, Upload } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
@@ -109,6 +109,15 @@ export function InterpretationVisionTool() {
       setDefinition(option);
       setError(err instanceof Error ? err.message : t("extraction_failed"));
     }
+  };
+
+  const clearDefinition = () => {
+    setDefinition(undefined);
+    setDefinitionQuery("");
+    setRows(null);
+    setError("");
+    setSaved(false);
+    setListOpen(false);
   };
 
   const onFiles = async (list: FileList | null) => {
@@ -224,7 +233,19 @@ export function InterpretationVisionTool() {
               aria-expanded={listOpen}
               aria-controls="observation-definition-list"
             />
-            <ChevronDown className="pointer-events-none absolute top-1/2 right-2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+            {definition ? (
+              <button
+                type="button"
+                className="absolute top-1/2 right-1 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-500 hover:text-gray-900"
+                aria-label={t("clear")}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={clearDefinition}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : (
+              <ChevronDown className="pointer-events-none absolute top-1/2 right-2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+            )}
           </div>
           {listOpen && (
             <ul
