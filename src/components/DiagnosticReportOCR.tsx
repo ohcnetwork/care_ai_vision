@@ -35,7 +35,7 @@ import { resolveDiagnosticReportContext } from "@/lib/service-request";
 type Status = "idle" | "processing" | "filling" | "success" | "error";
 
 const FIELD_FILL_DELAY_MS = 350;
-const LOW_CONFIDENCE_THRESHOLD = 0.7;
+const LOW_CONFIDENCE_THRESHOLD = 0.99;
 const EXTRACTION_MESSAGE_KEYS = [
   "extracting_information",
   "autofilling_fields",
