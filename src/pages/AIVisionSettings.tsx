@@ -1,3 +1,6 @@
+import { Eye, EyeOff, Loader2 } from "lucide-react";
+
+import { InterpretationVisionTool } from "@/components/InterpretationVisionTool";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -10,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { useAiVisionEnabled } from "@/hooks/useAiVisionEnabled";
 import { useHasFacilityPermission } from "@/hooks/useFacilityPermission";
 import { useTranslation } from "@/hooks/useTranslation";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { isInterpretationVisionEnabled } from "@/lib/plugin-config";
 
 export default function AIVisionSettings() {
   const { t } = useTranslation();
@@ -35,36 +38,39 @@ export default function AIVisionSettings() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              {enabled ? (
-                <Eye className="h-5 w-5 text-green-500" />
-              ) : (
-                <EyeOff className="h-5 w-5 text-gray-400" />
-              )}
-              {t("ocr_form_fill")}
-              <Badge
-                className={
-                  enabled
-                    ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
-                    : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
-                }
-              >
-                {enabled ? t("enable") : t("disable")}
-              </Badge>
-            </CardTitle>
-            <CardDescription>
-              {t("ai_vision_settings_description")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <div className="text-sm text-muted-foreground">
-              {enabled ? t("plugin_enabled") : t("plugin_disabled")}
-            </div>
-            <Switch checked={enabled} onCheckedChange={setEnabled} />
-          </CardContent>
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                {enabled ? (
+                  <Eye className="h-5 w-5 text-green-500" />
+                ) : (
+                  <EyeOff className="h-5 w-5 text-gray-400" />
+                )}
+                {t("ocr_form_fill")}
+                <Badge
+                  className={
+                    enabled
+                      ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+                      : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+                  }
+                >
+                  {enabled ? t("enable") : t("disable")}
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                {t("ai_vision_settings_description")}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between">
+              <div className="text-sm text-muted-foreground">
+                {enabled ? t("plugin_enabled") : t("plugin_disabled")}
+              </div>
+              <Switch checked={enabled} onCheckedChange={setEnabled} />
+            </CardContent>
+          </Card>
+          {isInterpretationVisionEnabled() && <InterpretationVisionTool />}
+        </div>
       )}
     </div>
   );

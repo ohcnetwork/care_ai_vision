@@ -14,7 +14,8 @@
  *     "name": "care_ai_vision_fe",
  *     "config": {
  *       "MEDISPEAK_API_URL": "https://api.medispeak.example/api/v2",
- *       "LOW_CONFIDENCE_THRESHOLD": "0.99"
+ *       "LOW_CONFIDENCE_THRESHOLD": "0.99",
+ *       "INTERPRETATION_VISION_ENABLED": "true"
  *     }
  *   }
  *
@@ -106,5 +107,24 @@ export function readLowConfidenceThreshold(): number {
       (import.meta.env.REACT_LOW_CONFIDENCE_THRESHOLD || "").toString(),
     ) ??
     DEFAULT_LOW_CONFIDENCE_THRESHOLD
+  );
+}
+
+function parseConfigFlag(raw: string | undefined): boolean {
+  if (!raw) return false;
+  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+/**
+ * Internal settings-page tool: extract printed interpretation and
+ * reference ranges. Off unless plugin config (or local env) turns it on.
+ */
+export function isInterpretationVisionEnabled(): boolean {
+  return (
+    parseConfigFlag(readPluginConfig("INTERPRETATION_VISION_ENABLED")) ||
+    parseConfigFlag(readPluginConfig("REACT_INTERPRETATION_VISION_ENABLED")) ||
+    parseConfigFlag(
+      (import.meta.env.REACT_INTERPRETATION_VISION_ENABLED || "").toString(),
+    )
   );
 }

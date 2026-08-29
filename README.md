@@ -36,6 +36,8 @@ Set the Medispeak API root, either:
 
 Lab values below `LOW_CONFIDENCE_THRESHOLD` (plugin config) or `REACT_LOW_CONFIDENCE_THRESHOLD` (`.env`) are marked **Check this**. Default is `0.99`. Use `0.99` or `99`.
 
+Set `INTERPRETATION_VISION_ENABLED` to `true` in this plugin's config (or `REACT_INTERPRETATION_VISION_ENABLED` in `.env`) to show the internal Interpretation Vision tool on the AI Vision settings page.
+
 > care_filly holds the `MEDISPEAK_API_KEY` account secret and mints short-lived, session-scoped tokens. This plugin only ever talks to Medispeak with those scoped tokens.
 
 ### Development
