@@ -218,7 +218,7 @@ export function InterpretationVisionTool() {
               }}
               onFocus={() => setListOpen(true)}
               placeholder={t("search_observation_definition")}
-              className="h-8 w-full rounded-md border border-gray-300 py-1 pr-8 pl-2 text-sm"
+              className="h-8 w-full rounded-md border border-gray-300 py-1 pr-8 pl-2 text-base sm:text-sm"
               autoComplete="off"
               role="combobox"
               aria-expanded={listOpen}

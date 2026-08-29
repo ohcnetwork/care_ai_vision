@@ -22,7 +22,7 @@ export default function AIVisionSettings() {
   const { enabled, setEnabled } = useAiVisionEnabled();
 
   return (
-    <div className="care-ai-vision-container mx-auto max-w-3xl py-8 px-4">
+    <div className="care-ai-vision-container mx-auto max-w-3xl py-8 sm:px-4">
       <h1 className="text-2xl font-bold mb-6">{t("ai_vision_settings")}</h1>
 
       {isPermissionLoading ? (
