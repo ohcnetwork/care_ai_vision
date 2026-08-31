@@ -67,6 +67,7 @@ export interface FillMarkLabels {
 }
 
 type LabHighlightDef = {
+  id: string;
   title?: string;
   code?: { code?: string; display?: string };
   component?: { code: { code: string; display?: string } }[];
@@ -107,9 +108,7 @@ function labFieldKey(
   kind: "value" | "unit",
   componentCode?: string,
 ): string {
-  const heading =
-    definition.title || definition.code?.display || definition.code?.code || "";
-  return `${heading}::${kind}::${componentCode ?? ""}`;
+  return `${definition.id}::${kind}::${componentCode ?? ""}`;
 }
 
 export function findLabObservationElement(
@@ -129,13 +128,21 @@ export function findLabObservationElement(
 
   let scope: ParentNode = card;
   if (componentCode) {
-    const comp = definition.component?.find(
-      (c) => c.code.code === componentCode,
-    );
+    const componentIndex =
+      definition.component?.findIndex((c) => c.code.code === componentCode) ??
+      -1;
+    const comp =
+      componentIndex >= 0 ? definition.component?.[componentIndex] : undefined;
     const name = comp?.code.display || comp?.code.code || componentCode;
-    const compLabel = [...card.querySelectorAll("label")].find((label) =>
-      (label.textContent || "").includes(name),
+
+    const candidates = [...card.querySelectorAll("label")].filter(
+      (label) => label !== headingLabel,
     );
+    const compLabel =
+      candidates.find(
+        (label) =>
+          label.textContent?.trim() === `${componentIndex + 1}. ${name}`,
+      ) ?? candidates.find((label) => (label.textContent || "").includes(name));
     if (compLabel?.parentElement) scope = compLabel.parentElement;
   }
 
