@@ -31,6 +31,7 @@ import {
   searchObservationDefinitions,
   writeFindingsBatch,
   type ObservationDefinitionRead,
+  type PrintedRangeFinding,
 } from "@/lib/observation-definition";
 
 function isLabFile(file: File): boolean {
@@ -49,7 +50,67 @@ type FindingRow = {
   definitionSlug: string;
   ref_min?: string;
   ref_max?: string;
+  ref_min_male?: string;
+  ref_max_male?: string;
+  ref_min_female?: string;
+  ref_max_female?: string;
 };
+
+function rowHasSexSpecificRange(row: FindingRow): boolean {
+  return !!(
+    row.ref_min_male ||
+    row.ref_max_male ||
+    row.ref_min_female ||
+    row.ref_max_female
+  );
+}
+
+/** A min–max input pair, reused for the general range and the male/female ranges. */
+function RangeInputs({
+  idPrefix,
+  min,
+  max,
+  onMinChange,
+  onMaxChange,
+  minLabel,
+  maxLabel,
+}: {
+  idPrefix: string;
+  min?: string;
+  max?: string;
+  onMinChange: (value: string) => void;
+  onMaxChange: (value: string) => void;
+  minLabel: string;
+  maxLabel: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <label className="sr-only" htmlFor={`min-${idPrefix}`}>
+        {minLabel}
+      </label>
+      <input
+        id={`min-${idPrefix}`}
+        inputMode="decimal"
+        value={min ?? ""}
+        onChange={(e) => onMinChange(e.target.value)}
+        placeholder={minLabel}
+        className="h-8 w-24 rounded-md border border-gray-300 px-2 text-sm"
+      />
+      <span className="text-muted-foreground">–</span>
+      <label className="sr-only" htmlFor={`max-${idPrefix}`}>
+        {maxLabel}
+      </label>
+      <input
+        id={`max-${idPrefix}`}
+        inputMode="decimal"
+        value={max ?? ""}
+        onChange={(e) => onMaxChange(e.target.value)}
+        placeholder={maxLabel}
+        className="h-8 w-24 rounded-md border border-gray-300 px-2 text-sm"
+      />
+    </div>
+  );
+}
 
 export function InterpretationVisionTool() {
   const { t } = useTranslation();
@@ -62,6 +123,9 @@ export function InterpretationVisionTool() {
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(0);
   const [rows, setRows] = useState<FindingRow[] | null>(null);
+  // Rows where the male/female range inputs are shown even though no value
+  // was extracted yet — toggled on manually via "Add sex-specific range".
+  const [sexSplitRows, setSexSplitRows] = useState<Set<string>>(new Set());
   const [definitionQuery, setDefinitionQuery] = useState("");
   const [definitionOptions, setDefinitionOptions] = useState<
     ObservationDefinitionRead[]
@@ -243,6 +307,7 @@ export function InterpretationVisionTool() {
     setError("");
     setSaved(0);
     setRows(null);
+    setSexSplitRows(new Set());
     try {
       const findings = await extractInterpretationFindings(
         files,
@@ -256,6 +321,10 @@ export function InterpretationVisionTool() {
           definitionSlug: finding.definitionSlug,
           ref_min: finding.ref_min,
           ref_max: finding.ref_max,
+          ref_min_male: finding.ref_min_male,
+          ref_max_male: finding.ref_max_male,
+          ref_min_female: finding.ref_min_female,
+          ref_max_female: finding.ref_max_female,
         })),
       );
     } catch (err) {
@@ -263,6 +332,22 @@ export function InterpretationVisionTool() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const updateRow = (
+    definitionSlug: string,
+    componentCode: string,
+    patch: Partial<FindingRow>,
+  ) => {
+    setRows(
+      (current) =>
+        current?.map((entry) =>
+          entry.componentCode === componentCode &&
+          entry.definitionSlug === definitionSlug
+            ? { ...entry, ...patch }
+            : entry,
+        ) ?? null,
+    );
   };
 
   const apply = async () => {
@@ -273,20 +358,22 @@ export function InterpretationVisionTool() {
       string,
       {
         componentCode: string;
-        finding: { ref_min?: string; ref_max?: string };
+        finding: PrintedRangeFinding;
       }[]
     >();
     for (const row of rows) {
       if (!row.componentCode) continue;
-      if (!row.ref_min?.trim() && !row.ref_max?.trim()) continue;
+      const finding: PrintedRangeFinding = {
+        ref_min: row.ref_min?.trim() || undefined,
+        ref_max: row.ref_max?.trim() || undefined,
+        ref_min_male: row.ref_min_male?.trim() || undefined,
+        ref_max_male: row.ref_max_male?.trim() || undefined,
+        ref_min_female: row.ref_min_female?.trim() || undefined,
+        ref_max_female: row.ref_max_female?.trim() || undefined,
+      };
+      if (!Object.values(finding).some(Boolean)) continue;
       const assignments = assignmentsBySlug.get(row.definitionSlug) ?? [];
-      assignments.push({
-        componentCode: row.componentCode,
-        finding: {
-          ref_min: row.ref_min?.trim() || undefined,
-          ref_max: row.ref_max?.trim() || undefined,
-        },
-      });
+      assignments.push({ componentCode: row.componentCode, finding });
       assignmentsBySlug.set(row.definitionSlug, assignments);
     }
 
@@ -527,59 +614,123 @@ export function InterpretationVisionTool() {
                 )}
                 {group.rows.map((row) => {
                   const rowKey = `${row.definitionSlug}::${row.componentCode}`;
+                  const showSexRanges =
+                    sexSplitRows.has(rowKey) || rowHasSexSpecificRange(row);
                   return (
                     <div
                       key={rowKey}
-                      className="flex flex-col gap-2 rounded-md border border-gray-200 bg-white p-3 sm:flex-row sm:items-center"
+                      className="space-y-2 rounded-md border border-gray-200 bg-white p-3"
                     >
-                      <span className="min-w-0 flex-1 text-sm font-medium">
-                        {row.name}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <label className="sr-only" htmlFor={`min-${rowKey}`}>
-                          {t("range_min")}
-                        </label>
-                        <input
-                          id={`min-${rowKey}`}
-                          inputMode="decimal"
-                          value={row.ref_min ?? ""}
-                          onChange={(e) =>
-                            setRows(
-                              (current) =>
-                                current?.map((entry) =>
-                                  entry.componentCode === row.componentCode &&
-                                  entry.definitionSlug === row.definitionSlug
-                                    ? { ...entry, ref_min: e.target.value }
-                                    : entry,
-                                ) ?? null,
-                            )
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <span className="min-w-0 flex-1 text-sm font-medium">
+                          {row.name}
+                        </span>
+                        <RangeInputs
+                          idPrefix={rowKey}
+                          min={row.ref_min}
+                          max={row.ref_max}
+                          minLabel={t("range_min")}
+                          maxLabel={t("range_max")}
+                          onMinChange={(value) =>
+                            updateRow(row.definitionSlug, row.componentCode, {
+                              ref_min: value,
+                            })
                           }
-                          placeholder={t("range_min")}
-                          className="h-8 w-24 rounded-md border border-gray-300 px-2 text-sm"
-                        />
-                        <span className="text-muted-foreground">–</span>
-                        <label className="sr-only" htmlFor={`max-${rowKey}`}>
-                          {t("range_max")}
-                        </label>
-                        <input
-                          id={`max-${rowKey}`}
-                          inputMode="decimal"
-                          value={row.ref_max ?? ""}
-                          onChange={(e) =>
-                            setRows(
-                              (current) =>
-                                current?.map((entry) =>
-                                  entry.componentCode === row.componentCode &&
-                                  entry.definitionSlug === row.definitionSlug
-                                    ? { ...entry, ref_max: e.target.value }
-                                    : entry,
-                                ) ?? null,
-                            )
+                          onMaxChange={(value) =>
+                            updateRow(row.definitionSlug, row.componentCode, {
+                              ref_max: value,
+                            })
                           }
-                          placeholder={t("range_max")}
-                          className="h-8 w-24 rounded-md border border-gray-300 px-2 text-sm"
                         />
                       </div>
+
+                      {showSexRanges ? (
+                        <div className="space-y-2 border-t border-gray-100 pt-2">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <span className="w-16 shrink-0 text-xs text-muted-foreground">
+                              {t("male")}
+                            </span>
+                            <RangeInputs
+                              idPrefix={`${rowKey}-male`}
+                              min={row.ref_min_male}
+                              max={row.ref_max_male}
+                              minLabel={t("range_min_male")}
+                              maxLabel={t("range_max_male")}
+                              onMinChange={(value) =>
+                                updateRow(
+                                  row.definitionSlug,
+                                  row.componentCode,
+                                  { ref_min_male: value },
+                                )
+                              }
+                              onMaxChange={(value) =>
+                                updateRow(
+                                  row.definitionSlug,
+                                  row.componentCode,
+                                  { ref_max_male: value },
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <span className="w-16 shrink-0 text-xs text-muted-foreground">
+                              {t("female")}
+                            </span>
+                            <RangeInputs
+                              idPrefix={`${rowKey}-female`}
+                              min={row.ref_min_female}
+                              max={row.ref_max_female}
+                              minLabel={t("range_min_female")}
+                              maxLabel={t("range_max_female")}
+                              onMinChange={(value) =>
+                                updateRow(
+                                  row.definitionSlug,
+                                  row.componentCode,
+                                  { ref_min_female: value },
+                                )
+                              }
+                              onMaxChange={(value) =>
+                                updateRow(
+                                  row.definitionSlug,
+                                  row.componentCode,
+                                  { ref_max_female: value },
+                                )
+                              }
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className="text-xs text-muted-foreground underline"
+                            onClick={() => {
+                              setSexSplitRows((current) => {
+                                const next = new Set(current);
+                                next.delete(rowKey);
+                                return next;
+                              });
+                              updateRow(row.definitionSlug, row.componentCode, {
+                                ref_min_male: undefined,
+                                ref_max_male: undefined,
+                                ref_min_female: undefined,
+                                ref_max_female: undefined,
+                              });
+                            }}
+                          >
+                            {t("remove_sex_specific_range")}
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground underline"
+                          onClick={() =>
+                            setSexSplitRows((current) =>
+                              new Set(current).add(rowKey),
+                            )
+                          }
+                        >
+                          {t("add_sex_specific_range")}
+                        </button>
+                      )}
                     </div>
                   );
                 })}

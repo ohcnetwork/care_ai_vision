@@ -78,7 +78,8 @@ export async function searchObservationDefinitions(
   const res = await fetch(apiUrl("/api/v1/observation_definition/", query), {
     headers: getHeaders(),
   });
-  const data = await readJson<PaginatedResponse<ObservationDefinitionRead>>(res);
+  const data =
+    await readJson<PaginatedResponse<ObservationDefinitionRead>>(res);
   return data.results ?? [];
 }
 
@@ -110,21 +111,71 @@ export function observationRangeTargets(
   ];
 }
 
-function bandsFromPrintedRange(finding: {
+export interface PrintedRangeFinding {
   ref_min?: string;
   ref_max?: string;
-}) {
-  const min = finding.ref_min;
-  const max = finding.ref_max;
-  if (!min && !max) {
-    throw new Error("No reference range to write");
+  // Present only when the printout shows separate ranges by sex.
+  ref_min_male?: string;
+  ref_max_male?: string;
+  ref_min_female?: string;
+  ref_max_female?: string;
+}
+
+function bandsFromPrintedRange(finding: PrintedRangeFinding) {
+  const male = numericBands(finding.ref_min_male, finding.ref_max_male);
+  const female = numericBands(finding.ref_min_female, finding.ref_max_female);
+
+  // Sex-specific ranges take precedence — they're gated by the backend's
+  // `patient_gender` condition metric instead of applying unconditionally.
+  if (male || female) {
+    const entries: {
+      conditions: {
+        metric: string;
+        operation: string;
+        value: string;
+      }[];
+      ranges: NumericBand[];
+    }[] = [];
+    if (male) {
+      entries.push({
+        conditions: [
+          { metric: "patient_gender", operation: "equality", value: "male" },
+        ],
+        ranges: male,
+      });
+    }
+    if (female) {
+      entries.push({
+        conditions: [
+          {
+            metric: "patient_gender",
+            operation: "equality",
+            value: "female",
+          },
+        ],
+        ranges: female,
+      });
+    }
+    return entries;
   }
 
-  const ranges: {
-    interpretation: { display: string };
-    min?: string;
-    max?: string;
-  }[] = [];
+  const ranges = numericBands(finding.ref_min, finding.ref_max);
+  if (!ranges) {
+    throw new Error("No reference range to write");
+  }
+  return [{ ranges, conditions: [] }];
+}
+
+interface NumericBand {
+  interpretation: { display: string };
+  min?: string;
+  max?: string;
+}
+
+function numericBands(min?: string, max?: string): NumericBand[] | null {
+  if (!min && !max) return null;
+
+  const ranges: NumericBand[] = [];
 
   if (min && max) {
     ranges.push({ max: min, interpretation: { display: "Low" } });
@@ -138,12 +189,12 @@ function bandsFromPrintedRange(finding: {
     ranges.push({ min, interpretation: { display: "Normal" } });
   }
 
-  return [{ ranges, conditions: [] }];
+  return ranges;
 }
 
 function updateBody(
   definition: ObservationDefinitionRead,
-  assignments: { componentCode?: string; finding: { ref_min?: string; ref_max?: string } }[],
+  assignments: { componentCode?: string; finding: PrintedRangeFinding }[],
 ) {
   const slug_value = definition.slug_config?.slug_value;
   if (!slug_value) {
@@ -194,7 +245,7 @@ export async function writeFindingsBatch(
     slug: string;
     assignments: {
       componentCode?: string;
-      finding: { ref_min?: string; ref_max?: string };
+      finding: PrintedRangeFinding;
     }[];
   }[],
 ): Promise<void> {

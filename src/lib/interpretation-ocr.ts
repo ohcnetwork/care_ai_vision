@@ -9,6 +9,11 @@ export interface InterpretationFinding {
   name: string;
   ref_min?: string;
   ref_max?: string;
+  // Present only when the printout shows separate ranges by sex.
+  ref_min_male?: string;
+  ref_max_male?: string;
+  ref_min_female?: string;
+  ref_max_female?: string;
   componentCode: string;
   definitionSlug: string;
 }
@@ -49,23 +54,46 @@ export async function extractInterpretationFindings(
     if (used.has(alias)) alias = `${alias}_${index}`;
     used.add(alias);
     const name = target.code.display || target.code.code;
-    const minKey = `${alias}_min`;
-    const maxKey = `${alias}_max`;
     const targetKey = `${target.definitionSlug}::${target.code.code}`;
-    keyMap[minKey] = targetKey;
-    keyMap[maxKey] = targetKey;
-    specs.push({
-      key: minKey,
-      label: `${name} reference range minimum`,
-      type: "string",
-      description: `Lower bound of the printed reference range for ${name}. Empty if not shown.`,
-    });
-    specs.push({
-      key: maxKey,
-      label: `${name} reference range maximum`,
-      type: "string",
-      description: `Upper bound of the printed reference range for ${name}. Empty if not shown.`,
-    });
+
+    const field = (key: string, label: string, description: string): void => {
+      keyMap[key] = targetKey;
+      specs.push({ key, label, type: "string", description });
+    };
+
+    field(
+      `${alias}_min`,
+      `${name} reference range minimum`,
+      `Lower bound of the printed reference range for ${name}. Empty if not shown, or if the report only prints separate male/female ranges.`,
+    );
+    field(
+      `${alias}_max`,
+      `${name} reference range maximum`,
+      `Upper bound of the printed reference range for ${name}. Empty if not shown, or if the report only prints separate male/female ranges.`,
+    );
+    // Some analytes (e.g. haemoglobin, creatinine) print two ranges labelled
+    // by sex instead of one shared range — request both, only populated when
+    // the report actually splits them out.
+    field(
+      `${alias}_min_male`,
+      `${name} male reference range minimum`,
+      `Lower bound of the male-specific reference range for ${name}, if the report prints separate ranges by sex. Empty otherwise.`,
+    );
+    field(
+      `${alias}_max_male`,
+      `${name} male reference range maximum`,
+      `Upper bound of the male-specific reference range for ${name}, if the report prints separate ranges by sex. Empty otherwise.`,
+    );
+    field(
+      `${alias}_min_female`,
+      `${name} female reference range minimum`,
+      `Lower bound of the female-specific reference range for ${name}, if the report prints separate ranges by sex. Empty otherwise.`,
+    );
+    field(
+      `${alias}_max_female`,
+      `${name} female reference range maximum`,
+      `Upper bound of the female-specific reference range for ${name}, if the report prints separate ranges by sex. Empty otherwise.`,
+    );
   });
 
   const result = await runMedispeakOcr(files, { facilityId, fields: specs });
@@ -85,8 +113,14 @@ export async function extractInterpretationFindings(
     if (!finding) continue;
     const value = asOptionalString(raw);
     if (!value) continue;
-    if (key.endsWith("_min")) finding.ref_min = value;
-    if (key.endsWith("_max")) finding.ref_max = value;
+    // Check the sex-specific suffixes first — they're longer and would
+    // otherwise also match the generic "_min"/"_max" checks.
+    if (key.endsWith("_min_male")) finding.ref_min_male = value;
+    else if (key.endsWith("_max_male")) finding.ref_max_male = value;
+    else if (key.endsWith("_min_female")) finding.ref_min_female = value;
+    else if (key.endsWith("_max_female")) finding.ref_max_female = value;
+    else if (key.endsWith("_min")) finding.ref_min = value;
+    else if (key.endsWith("_max")) finding.ref_max = value;
   }
 
   return [...byKey.values()];
