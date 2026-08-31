@@ -1,3 +1,7 @@
+import {
+  executeBatchRequests,
+  type BatchRequestItem,
+} from "@/lib/batch-request";
 import { getHeaders, HttpError, type PaginatedResponse } from "@/lib/request";
 
 export interface ObservationCode {
@@ -184,25 +188,41 @@ function updateBody(
   };
 }
 
-export async function writeFindingsToDefinition(
-  slug: string,
+export async function writeFindingsBatch(
   facilityId: string,
-  assignments: {
-    componentCode?: string;
-    finding: { ref_min?: string; ref_max?: string };
+  entries: {
+    slug: string;
+    assignments: {
+      componentCode?: string;
+      finding: { ref_min?: string; ref_max?: string };
+    }[];
   }[],
 ): Promise<void> {
-  const current = await getObservationDefinition(slug, facilityId);
-  const body = updateBody(current, assignments);
-  const res = await fetch(
-    apiUrl(`/api/v1/observation_definition/${encodeURIComponent(slug)}/`, {
-      facility: facilityId,
-    }),
-    {
-      method: "PUT",
-      headers: getHeaders(),
-      body: JSON.stringify(body),
-    },
+  if (!entries.length) return;
+
+  const currents = await Promise.all(
+    entries.map((entry) => getObservationDefinition(entry.slug, facilityId)),
   );
-  await readJson(res);
+
+  const requests: BatchRequestItem[] = entries.map((entry, index) => ({
+    // Batch sub-request URLs are resolved by Django's router against the
+    // path only, so no origin here (unlike the direct-fetch helpers above).
+    url: `/api/v1/observation_definition/${encodeURIComponent(entry.slug)}/?facility=${encodeURIComponent(facilityId)}`,
+    method: "PUT",
+    body: updateBody(currents[index], entry.assignments),
+    reference_id: entry.slug,
+  }));
+
+  const results = await executeBatchRequests(requests);
+  const failed = results.filter(
+    (result) => result.status_code < 200 || result.status_code >= 300,
+  );
+  if (failed.length) {
+    throw new HttpError({
+      message: `Failed to update ${failed.length} of ${entries.length} observation definition(s)`,
+      status: failed[0].status_code,
+      silent: false,
+      cause: { results } as unknown as Record<string, unknown>,
+    });
+  }
 }

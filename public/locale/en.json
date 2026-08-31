@@ -1,4 +1,6 @@
 {
+  "activity_definition_observation_count_one": "{{count}} observation definition linked to this order type.",
+  "activity_definition_observation_count_other": "{{count}} observation definitions linked to this order type.",
   "add_another": "Add another",
   "add_files": "Add Files",
   "add_photo": "Add Photo",
@@ -34,8 +36,11 @@
   "keep_docs_with_report": "Keep these docs with the report",
   "low_confidence_values_one": "{{count}} value read with low confidence - check it before saving.",
   "low_confidence_values_other": "{{count}} values read with low confidence - check them before saving.",
+  "match_by_activity": "Order type (all tests)",
+  "match_by_observation": "Single test / panel",
   "minimize_transcript": "Minimize transcript",
   "no_interpretation_extracted": "No interpretation or reference range could be read from this document.",
+  "no_observations_in_activity_definition": "This order type has no linked observation definitions.",
   "no_permission_ai_vision": "You do not have permission to use AI Vision on this facility.",
   "no_results": "No results",
   "no_values_extracted": "No values could be read from this document. Try another photo or file.",
@@ -50,7 +55,9 @@
   "resetting_position": "Resetting…",
   "scan_lab_report": "Scan lab report",
   "scan_registration_form": "Scan Registration Form",
+  "search_activity_definition": "Search order type",
   "search_observation_definition": "Search observation definition",
+  "select_activity_definition": "Select an order type first",
   "select_observation_definition": "Select observation definition",
   "saving": "Saving…",
   "show_transcript": "Show transcript",
@@ -63,5 +70,7 @@
   "values_filled_from_pages_other": "{{count}} values filled from {{pages}} docs",
   "verifying_details": "Verifying details",
   "write_matched_components": "Write to components",
-  "wrote_to_definition": "Reference range written to this observation definition."
+  "wrote_to_definition": "Reference range written to this observation definition.",
+  "wrote_to_definitions_one": "Reference ranges written to {{count}} observation definition.",
+  "wrote_to_definitions_other": "Reference ranges written to {{count}} observation definitions."
 }
