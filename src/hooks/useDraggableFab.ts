@@ -1,11 +1,10 @@
-import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
-
 import {
   FAB_POSITION_RESET_EVENT,
   fabPositionStorageKey,
   loadStoredFabOffset,
 } from "@/lib/fab-position";
+import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const DRAG_THRESHOLD_PX = 4;
 const VIEWPORT_MARGIN_PX = 5;

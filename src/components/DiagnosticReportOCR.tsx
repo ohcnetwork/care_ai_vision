@@ -1,28 +1,47 @@
 import {
   AlertCircle,
-  CheckCircle2,
+  Camera,
   FileText,
-  Loader2,
-  RotateCcw,
+  Plus,
   Sparkles,
+  Upload,
   X,
 } from "lucide-react";
-import { useAtomValue } from "jotai";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import { MatrixSpinner } from "@/components/ui/matrix-spinner";
+import { PixelSpinner } from "@/components/ui/pixel-spinner";
 
-import useAuthUser from "@/hooks/useAuthUser";
+import { useAiVisionEnabled } from "@/hooks/useAiVisionEnabled";
 import { useTranslation } from "@/hooks/useTranslation";
-import { extractLabResults, highlightLabObservation } from "@/lib/ocr";
 import { resolveFacilityIdFromPath } from "@/lib/facility";
-import { aiVisionEnabledAtomFor } from "@/state/ai-vision-store";
+import {
+  combineFilesForReportUpload,
+  uploadDiagnosticReportFile,
+} from "@/lib/files";
+import {
+  clearLabObservationMarks,
+  extractLabResults,
+  highlightLabObservation,
+  persistLabObservationMark,
+  type FillMark,
+} from "@/lib/ocr";
+import { readLowConfidenceThreshold } from "@/lib/plugin-config";
+import { resolveDiagnosticReportContext } from "@/lib/service-request";
 
 type Status = "idle" | "processing" | "filling" | "success" | "error";
 
 const FIELD_FILL_DELAY_MS = 350;
+const EXTRACTION_MESSAGE_KEYS = [
+  "extracting_information",
+  "autofilling_fields",
+  "verifying_details",
+  "almost_done",
+] as const;
 
 interface ObservationDefinition {
   id: string;
@@ -43,7 +62,36 @@ interface ExtractedResult {
     value: string;
     unit?: string;
     componentCode?: string;
+    confidence?: number;
   }[];
+}
+
+function asExtractedField(raw: unknown): {
+  value: string;
+  confidence?: number;
+} {
+  if (raw == null) return { value: "" };
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    const nested = obj.value ?? obj.text ?? "";
+    const conf = obj.confidence ?? obj.score;
+    const confidence =
+      typeof conf === "number"
+        ? conf
+        : typeof conf === "string" && conf.trim()
+          ? Number(conf)
+          : undefined;
+    return {
+      value: nested == null ? "" : String(nested),
+      confidence:
+        typeof confidence === "number" && Number.isFinite(confidence)
+          ? confidence > 1 && confidence <= 100
+            ? confidence / 100
+            : confidence
+          : undefined,
+    };
+  }
+  return { value: String(raw) };
 }
 
 interface FillStep {
@@ -72,7 +120,6 @@ function mapResults(
   result: Record<string, unknown>,
   definitions: ObservationDefinition[],
 ): ExtractedResult[] {
-  const asString = (v: unknown) => (v == null ? "" : String(v));
   const results: ExtractedResult[] = [];
 
   for (const def of definitions) {
@@ -80,12 +127,14 @@ function mapResults(
       const values = def.component
         .map((comp) => {
           const prefix = `${def.id}__${comp.code.code}`;
-          const value = asString(result[`${prefix}__value`]);
-          if (!value) return null;
+          const field = asExtractedField(result[`${prefix}__value`]);
+          if (!field.value) return null;
+          const unit = asExtractedField(result[`${prefix}__unit`]).value;
           return {
-            value,
-            unit: asString(result[`${prefix}__unit`]) || undefined,
+            value: field.value,
+            unit: unit || undefined,
             componentCode: comp.code.code,
+            confidence: field.confidence,
           };
         })
         .filter(Boolean) as ExtractedResult["values"];
@@ -94,12 +143,17 @@ function mapResults(
       continue;
     }
 
-    const value = asString(result[`${def.id}__value`]);
-    if (!value) continue;
+    const field = asExtractedField(result[`${def.id}__value`]);
+    if (!field.value) continue;
+    const unit = asExtractedField(result[`${def.id}__unit`]).value;
     results.push({
       definitionId: def.id,
       values: [
-        { value, unit: asString(result[`${def.id}__unit`]) || undefined },
+        {
+          value: field.value,
+          unit: unit || undefined,
+          confidence: field.confidence,
+        },
       ],
     });
   }
@@ -131,23 +185,23 @@ export default function DiagnosticReportOCR({
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const user = useAuthUser();
-  const enabledAtom = useMemo(
-    () => aiVisionEnabledAtomFor(user.id ?? user.username),
-    [user.id, user.username],
-  );
-  const enabled = useAtomValue(enabledAtom);
+  const queryClient = useQueryClient();
+  const { enabled } = useAiVisionEnabled();
 
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
   const [queued, setQueued] = useState<QueuedFile[]>([]);
   const [preview, setPreview] = useState<QueuedFile | null>(null);
-  const [filledCount, setFilledCount] = useState(0);
-  const [totalCount, setTotalCount] = useState(0);
+  const [filledValueCount, setFilledValueCount] = useState(0);
+  const [lowConfidenceCount, setLowConfidenceCount] = useState(0);
+  const [keepDocs, setKeepDocs] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const fillTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const queuedRef = useRef(queued);
   queuedRef.current = queued;
+  const keepDocsRef = useRef(keepDocs);
+  keepDocsRef.current = keepDocs;
 
   const clearFillTimeouts = () => {
     fillTimeoutsRef.current.forEach(clearTimeout);
@@ -161,6 +215,7 @@ export default function DiagnosticReportOCR({
       queuedRef.current.forEach((item) => {
         if (item.url) URL.revokeObjectURL(item.url);
       });
+      clearLabObservationMarks();
     };
   }, []);
 
@@ -176,10 +231,19 @@ export default function DiagnosticReportOCR({
       const byId = new Map(
         observationDefinitions.map((d) => [d.id, d] as const),
       );
+      const labels = {
+        autofilled: t("auto_filled"),
+        checkThis: t("check_this"),
+      };
 
       for (const result of mapped) {
         const def = byId.get(result.definitionId);
         for (const val of result.values) {
+          const mark: FillMark =
+            val.confidence != null &&
+            val.confidence < readLowConfidenceThreshold()
+              ? "check_this"
+              : "autofilled";
           if (val.componentCode) {
             steps.push({
               apply: () =>
@@ -190,14 +254,27 @@ export default function DiagnosticReportOCR({
                   val.value,
                   val.unit || "",
                 ),
-              highlight: () =>
-                def && highlightLabObservation(def, "value", val.componentCode),
+              highlight: () => {
+                if (!def) return;
+                highlightLabObservation(def, "value", val.componentCode);
+                persistLabObservationMark(
+                  def,
+                  "value",
+                  mark,
+                  labels,
+                  val.componentCode,
+                );
+              },
             });
             continue;
           }
           steps.push({
             apply: () => handleValueChange(result.definitionId, 0, val.value),
-            highlight: () => def && highlightLabObservation(def, "value"),
+            highlight: () => {
+              if (!def) return;
+              highlightLabObservation(def, "value");
+              persistLabObservationMark(def, "value", mark, labels);
+            },
           });
           if (val.unit) {
             steps.push({
@@ -214,13 +291,12 @@ export default function DiagnosticReportOCR({
       handleComponentValueChange,
       handleValueChange,
       handleUnitChange,
+      t,
     ],
   );
 
   const runFillAnimation = useCallback((steps: FillStep[]) => {
     clearFillTimeouts();
-    setFilledCount(0);
-    setTotalCount(steps.length);
 
     if (steps.length === 0) {
       setStatus("success");
@@ -232,7 +308,6 @@ export default function DiagnosticReportOCR({
       const timeoutId = setTimeout(() => {
         step.apply();
         requestAnimationFrame(() => step.highlight());
-        setFilledCount(index + 1);
         if (index === steps.length - 1) setStatus("success");
       }, index * FIELD_FILL_DELAY_MS);
       fillTimeoutsRef.current.push(timeoutId);
@@ -281,10 +356,11 @@ export default function DiagnosticReportOCR({
     if (!files.length) return;
 
     clearFillTimeouts();
+    clearLabObservationMarks();
     setStatus("processing");
     setError("");
-    setFilledCount(0);
-    setTotalCount(0);
+    setFilledValueCount(0);
+    setLowConfidenceCount(0);
 
     try {
       const labResults = await extractLabResults(
@@ -293,35 +369,82 @@ export default function DiagnosticReportOCR({
         resolveFacilityIdFromPath(),
       );
       const mapped = mapResults(labResults, observationDefinitions);
+      setFilledValueCount(
+        mapped.reduce((n, item) => n + item.values.length, 0),
+      );
+      setLowConfidenceCount(
+        mapped.reduce(
+          (n, item) =>
+            n +
+            item.values.filter(
+              (val) =>
+                val.confidence != null &&
+                val.confidence < readLowConfidenceThreshold(),
+            ).length,
+          0,
+        ),
+      );
       runFillAnimation(buildFillSteps(mapped));
+
+      if (keepDocsRef.current) {
+        void (async () => {
+          try {
+            const context = await resolveDiagnosticReportContext();
+            if (!context) return;
+            const displayName = `${context.patientName} - ${context.testName}`;
+            const file = await combineFilesForReportUpload(files, displayName);
+            await uploadDiagnosticReportFile(
+              file,
+              context.reportId,
+              displayName,
+            );
+            await queryClient.invalidateQueries({
+              queryKey: ["files", "diagnostic_report", context.reportId],
+            });
+          } catch (err) {
+            console.error("Failed to attach scanned file to report", err);
+          }
+        })();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("extraction_failed"));
       setStatus("error");
     }
-  }, [observationDefinitions, t, buildFillSteps, runFillAnimation]);
+  }, [
+    observationDefinitions,
+    t,
+    buildFillSteps,
+    runFillAnimation,
+    queryClient,
+  ]);
 
   const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = [...(e.target.files ?? [])];
     if (files.length) appendFiles(files);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
   };
 
   const reset = useCallback(() => {
     clearFillTimeouts();
+    clearLabObservationMarks();
     revokeAll(queuedRef.current);
     setQueued([]);
     setPreview(null);
     setStatus("idle");
     setError("");
-    setFilledCount(0);
-    setTotalCount(0);
+    setFilledValueCount(0);
+    setLowConfidenceCount(0);
+    setKeepDocs(true);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
   }, []);
 
   if (disabled || !enabled) return null;
 
   const staging = status === "idle" || status === "error";
   const busy = status === "processing" || status === "filling";
+  const noValuesFilled = filledValueCount === 0;
 
   return (
     <div className="care-ai-vision-container">
@@ -334,52 +457,61 @@ export default function DiagnosticReportOCR({
           className="hidden"
           onChange={onInputChange}
         />
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          multiple
+          className="hidden"
+          onChange={onInputChange}
+        />
 
-        {staging && (
-          <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3 space-y-3">
-            {queued.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2">
-                {queued.map((item, i) => (
-                  <div key={fileKey(item.file)} className="relative">
-                    <button
-                      type="button"
-                      className="block"
-                      onClick={() => {
-                        if (!item.url) return;
-                        if (item.file.type.startsWith("image/")) {
-                          setPreview(item);
-                        } else {
-                          window.open(item.url, "_blank", "noopener");
-                        }
-                      }}
-                    >
-                      {item.file.type.startsWith("image/") && item.url ? (
-                        <img
-                          src={item.url}
-                          alt=""
-                          className="h-14 w-14 rounded object-cover"
-                        />
-                      ) : (
-                        <span className="flex h-14 w-14 items-center justify-center rounded bg-white text-blue-600">
-                          <FileText className="h-5 w-5" />
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeAt(i)}
-                      className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-gray-800 text-white"
-                      title={t("remove_page")}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-                <span className="text-xs font-medium text-blue-700">
-                  {t("queued_pages", { count: queued.length })}
-                </span>
-              </div>
-            )}
+        {staging && queued.length === 0 && (
+          <div className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50/70 px-4 py-3 md:flex-row md:items-center md:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-blue-900">
+                {t("autofill_from")}
+              </p>
+              <p className="text-sm text-gray-800">
+                {t("autofill_from_description")}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="white"
+                size="sm"
+                className="gap-2 md:hidden"
+                onClick={() => cameraInputRef.current?.click()}
+              >
+                <Camera className="h-4 w-4" />
+                {t("take_photo")}
+              </Button>
+              <Button
+                type="button"
+                variant="white"
+                size="sm"
+                className="gap-2"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Upload className="h-4 w-4" />
+                {t("upload_files")}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {staging && queued.length > 0 && (
+          <div className="space-y-4 rounded-lg border border-blue-200 bg-blue-50/70 p-4">
+            <div>
+              <p className="text-sm font-semibold text-blue-900">
+                {t("docs_ready_to_autofill", { count: queued.length })}
+              </p>
+              <p className="text-sm text-gray-800">
+                {t("docs_ready_to_autofill_description")}
+              </p>
+            </div>
 
             {status === "error" && (
               <div className="flex items-center gap-2 text-sm text-red-600">
@@ -389,78 +521,181 @@ export default function DiagnosticReportOCR({
             )}
 
             <div className="flex flex-wrap items-center gap-2">
+              {queued.map((item, i) => (
+                <div
+                  key={fileKey(item.file)}
+                  className="flex overflow-hidden rounded-md border border-gray-300 bg-white"
+                >
+                  <button
+                    type="button"
+                    className="block"
+                    onClick={() => {
+                      if (!item.url) return;
+                      if (item.file.type.startsWith("image/")) {
+                        setPreview(item);
+                      } else {
+                        window.open(item.url, "_blank", "noopener");
+                      }
+                    }}
+                  >
+                    {item.file.type.startsWith("image/") && item.url ? (
+                      <img
+                        src={item.url}
+                        alt=""
+                        className="size-10 object-cover hover:opacity-80"
+                      />
+                    ) : (
+                      <span className="flex size-10 items-center justify-center text-blue-600">
+                        <FileText className="h-5 w-5" />
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeAt(i)}
+                    className="flex items-center border-l border-gray-200 px-2 text-gray-500 hover:bg-gray-50 hover:text-gray-800"
+                    title={t("remove_page")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="white"
+                size="sm"
+                className="h-10 gap-2 md:hidden"
+                onClick={() => cameraInputRef.current?.click()}
+              >
+                <Camera className="h-4 w-4" />
+                {t("take_photo")}
+              </Button>
+              <Button
+                type="button"
+                variant="white"
+                size="sm"
+                className="h-10 gap-2"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Plus className="h-4 w-4" />
+                {t("add_files")}
+              </Button>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-800">
+                <input
+                  type="checkbox"
+                  checked={keepDocs}
+                  onChange={(e) => setKeepDocs(e.target.checked)}
+                  className="size-4 rounded border-primary-500 bg-gray-200 checked:bg-primary-700 focus:ring-primary-800"
+                />
+                {t("keep_docs_with_report")}
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="white" size="sm" onClick={reset}>
+                  {t("discard")}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="bg-green-800 text-white hover:bg-green-900"
+                  onClick={extract}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {t("autofill_from_n_docs", { count: queued.length })}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {staging && queued.length === 0 && status === "error" && (
+          <div className="flex items-center gap-2 text-sm text-red-600">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            {error}
+          </div>
+        )}
+
+        {busy && <ExtractionLoader status={status} />}
+
+        {status === "success" && (
+          <div
+            className={
+              noValuesFilled
+                ? "flex flex-col gap-3 rounded-lg border border-red-600 bg-red-50 px-4 py-3 md:flex-row md:items-center md:justify-between"
+                : "flex flex-col gap-3 rounded-lg border border-green-600 bg-green-50 px-4 py-3 md:flex-row md:items-center md:justify-between"
+            }
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <MatrixSpinner
+                name={noValuesFilled ? "grid-tilt" : "spin-check"}
+                size="20"
+                className={
+                  noValuesFilled
+                    ? "shrink-0 text-red-800"
+                    : "shrink-0 text-green-900"
+                }
+              />
+              <div>
+                <p
+                  className={
+                    noValuesFilled
+                      ? "text-sm font-medium text-red-800"
+                      : "text-sm font-medium text-green-900"
+                  }
+                >
+                  {t("values_filled_from_pages", {
+                    count: filledValueCount,
+                    pages: queued.length,
+                  })}
+                </p>
+                {noValuesFilled ? (
+                  <p className="text-sm text-red-700">
+                    {t("no_values_extracted")}
+                  </p>
+                ) : (
+                  lowConfidenceCount > 0 && (
+                    <p className="text-sm text-green-800">
+                      {t("low_confidence_values", {
+                        count: lowConfidenceCount,
+                      })}
+                    </p>
+                  )
+                )}
+              </div>
+            </div>
+            <ButtonGroup className="md:hidden" aria-label={t("add_files")}>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
+                onClick={() => cameraInputRef.current?.click()}
+              >
+                <Camera />
+                {t("add_photo")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => fileInputRef.current?.click()}
               >
-                <FileText className="h-4 w-4" />
-                {queued.length ? t("add_another") : t("choose_file")}
+                <Plus />
+                {t("add_files")}
               </Button>
-              {queued.length > 0 && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className="gap-2 bg-blue-600 text-white hover:bg-blue-700"
-                  onClick={extract}
-                >
-                  <Sparkles className="h-4 w-4" />
-                  {t("extract")}
-                </Button>
-              )}
-              {queued.length > 0 && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={reset}
-                  className="text-gray-500"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {busy && (
-          <div className="flex items-center gap-3 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
-            <PreviewStack queued={queued} />
-            <div className="flex items-center gap-2 text-sm text-blue-700">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {status === "processing"
-                ? t("extracting_lab_results")
-                : t("filling_fields", { count: totalCount })}
-            </div>
-          </div>
-        )}
-
-        {status === "success" && (
-          <div className="flex items-center gap-3 rounded-lg border border-green-100 bg-green-50/50 p-3">
-            <PreviewStack queued={queued} />
-            <div className="flex flex-1 items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <span className="text-sm text-green-700">
-                {t("filled_lab_fields", { count: filledCount })}
-              </span>
-              <Badge
-                variant="secondary"
-                className="bg-green-100 text-green-700 text-xs"
+            </ButtonGroup>
+            <ButtonGroup className="hidden md:flex" aria-label={t("add_files")}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
               >
-                {filledCount}
-              </Badge>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={reset}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </Button>
+                <Plus />
+                {t("add_files")}
+              </Button>
+            </ButtonGroup>
           </div>
         )}
       </div>
@@ -492,35 +727,49 @@ export default function DiagnosticReportOCR({
   );
 }
 
-function PreviewStack({ queued }: { queued: QueuedFile[] }) {
-  if (!queued.length) return null;
-  const shown = queued.slice(0, 3);
-  const extra = queued.length - shown.length;
+function useExtractionMessage(status: Status) {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    if (status === "processing") {
+      setIndex(0);
+      const id = window.setInterval(() => {
+        setIndex((current) => (current === 0 ? 2 : 0));
+      }, 2400);
+      return () => window.clearInterval(id);
+    }
+    if (status === "filling") {
+      setIndex(1);
+      const id = window.setInterval(() => {
+        setIndex((current) => Math.min(current + 1, 3));
+      }, 1400);
+      return () => window.clearInterval(id);
+    }
+    setIndex(0);
+  }, [status]);
+
+  return EXTRACTION_MESSAGE_KEYS[index];
+}
+
+function ExtractionLoader({ status }: { status: Status }) {
+  const { t } = useTranslation();
+  const messageKey = useExtractionMessage(status);
 
   return (
-    <div className="flex -space-x-2">
-      {shown.map((item, i) =>
-        item.file.type.startsWith("image/") && item.url ? (
-          <img
-            key={`${fileKey(item.file)}-${i}`}
-            src={item.url}
-            alt=""
-            className="h-12 w-12 rounded border border-white object-cover"
+    <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50/70 px-4 py-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <div className="flex items-center gap-2 text-sm text-blue-500">
+          <PixelSpinner
+            name="braille"
+            size="19"
+            className="shrink-0 text-blue-800"
           />
-        ) : (
-          <span
-            key={`${fileKey(item.file)}-${i}`}
-            className="flex h-12 w-12 items-center justify-center rounded border border-white bg-white text-blue-600"
-          >
-            <FileText className="h-5 w-5" />
-          </span>
-        ),
-      )}
-      {extra > 0 && (
-        <span className="flex h-12 w-12 items-center justify-center rounded border border-white bg-blue-100 text-xs font-semibold text-blue-700">
-          +{extra}
-        </span>
-      )}
+          <span className="font-semibold text-blue-900">{t(messageKey)}</span>
+        </div>
+        <p className="text-sm text-blue-900 italic">
+          {t("please_wait_while_we_fill")}
+        </p>
+      </div>
     </div>
   );
 }

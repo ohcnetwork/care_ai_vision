@@ -127,6 +127,19 @@ function canonicalLabKey(target: LabFieldTarget): string {
   return `${prefix}__${target.kind}`;
 }
 
+/** Medispeak form fields are typed; we ask for 0–1, but models sometimes emit 0–100. */
+function parseConfidence(raw: unknown): number | undefined {
+  const n =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim()
+        ? Number(raw)
+        : NaN;
+  if (!Number.isFinite(n)) return undefined;
+  const unit = n > 1 && n <= 100 ? n / 100 : n;
+  return Math.min(1, Math.max(0, unit));
+}
+
 function remapLabResult(
   result: Record<string, unknown>,
   keyMap: LabFieldKeyMap,
@@ -136,6 +149,13 @@ function remapLabResult(
     const target = keyMap[shortKey];
     if (!target) continue;
     remapped[canonicalLabKey(target)] = value;
+  }
+  for (const [shortKey, target] of Object.entries(keyMap)) {
+    if (target.kind !== "value") continue;
+    const confidence = parseConfidence(result[`${shortKey}c`]);
+    if (confidence == null) continue;
+    const canon = canonicalLabKey(target);
+    remapped[canon] = { value: remapped[canon], confidence };
   }
   return remapped;
 }
@@ -163,6 +183,13 @@ export function buildLabFieldSpecs(definitions: LabDefinitionLike[]): {
       label: `${labelBase} value`,
       type: "string",
       description,
+    });
+    specs.push({
+      key: `${valueKey}c`,
+      label: `${labelBase} value confidence`,
+      type: "number",
+      description:
+        "How sure you are of this extracted value, from 0 (illegible or guessed) to 1 (clearly readable). Always set when the value is filled.",
     });
     specs.push({
       key: unitKey,

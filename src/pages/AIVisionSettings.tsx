@@ -1,7 +1,3 @@
-import { Eye, EyeOff, Loader2 } from "lucide-react";
-import { useAtom } from "jotai";
-import { useCallback, useEffect, useMemo } from "react";
-
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -11,45 +7,16 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-
-import useAuthUser from "@/hooks/useAuthUser";
+import { useAiVisionEnabled } from "@/hooks/useAiVisionEnabled";
 import { useHasFacilityPermission } from "@/hooks/useFacilityPermission";
 import { useTranslation } from "@/hooks/useTranslation";
-import {
-  aiVisionEnabledAtomFor,
-  fetchAiVisionPreference,
-  preferencesSyncedAtom,
-  setAiVisionPreference,
-} from "@/state/ai-vision-store";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 
 export default function AIVisionSettings() {
   const { t } = useTranslation();
-  const user = useAuthUser();
   const { hasPermission, isLoading: isPermissionLoading } =
     useHasFacilityPermission("can_use_filly");
-  const enabledAtom = useMemo(
-    () => aiVisionEnabledAtomFor(user.id ?? user.username),
-    [user.id, user.username],
-  );
-  const [enabled, setEnabled] = useAtom(enabledAtom);
-  const [synced, setSynced] = useAtom(preferencesSyncedAtom);
-
-  // On mount, sync from server once per session
-  useEffect(() => {
-    if (synced) return;
-    fetchAiVisionPreference().then((serverValue) => {
-      setEnabled(serverValue);
-      setSynced(true);
-    });
-  }, [synced, setEnabled, setSynced]);
-
-  const handleToggle = useCallback(
-    (checked: boolean) => {
-      setEnabled(checked);
-      setAiVisionPreference(checked);
-    },
-    [setEnabled],
-  );
+  const { enabled, setEnabled } = useAiVisionEnabled();
 
   return (
     <div className="care-ai-vision-container mx-auto max-w-3xl py-8 px-4">
@@ -95,7 +62,7 @@ export default function AIVisionSettings() {
             <div className="text-sm text-muted-foreground">
               {enabled ? t("plugin_enabled") : t("plugin_disabled")}
             </div>
-            <Switch checked={enabled} onCheckedChange={handleToggle} />
+            <Switch checked={enabled} onCheckedChange={setEnabled} />
           </CardContent>
         </Card>
       )}
