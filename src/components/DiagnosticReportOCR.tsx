@@ -194,7 +194,7 @@ export default function DiagnosticReportOCR({
   const [preview, setPreview] = useState<QueuedFile | null>(null);
   const [filledValueCount, setFilledValueCount] = useState(0);
   const [lowConfidenceCount, setLowConfidenceCount] = useState(0);
-  const [keepDocs, setKeepDocs] = useState(true);
+  const [keepDocs, setKeepDocs] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const fillTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
