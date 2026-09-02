@@ -97,10 +97,48 @@ export function highlightElement(el: HTMLElement | null | undefined): void {
   setTimeout(() => el.classList.remove(HIGHLIGHT_CLASS), 1200);
 }
 
-export function highlightField(field: string): void {
-  highlightElement(
-    document.querySelector<HTMLElement>(`[name="${CSS.escape(field)}"]`),
+const FIELD_FALLBACK_RESOLVERS: Record<string, () => HTMLElement | null> = {
+  date_of_birth: () => {
+    const year = document.querySelector<HTMLElement>(
+      'input[placeholder="YYYY"]',
+    );
+    return year?.parentElement?.parentElement ?? year;
+  },
+};
+
+function isVisible(el: HTMLElement): boolean {
+  if (!el.isConnected) return false;
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 1 || rect.height <= 1) return false;
+  const style = getComputedStyle(el);
+  return (
+    style.visibility !== "hidden" &&
+    style.display !== "none" &&
+    parseFloat(style.opacity) !== 0
   );
+}
+
+export function highlightField(field: string): void {
+  const named = [
+    ...document.querySelectorAll<HTMLElement>(`[name="${CSS.escape(field)}"]`),
+  ];
+  let target = named.find(isVisible) ?? null;
+
+  if (!target && named.length) {
+    const hidden =
+      named.find((el) => (el as HTMLInputElement).checked) ?? named[0];
+    target =
+      hidden.parentElement?.querySelector<HTMLElement>(
+        '[role="combobox"], [role="radio"]',
+      ) ?? null;
+  }
+
+  if (!target) {
+    const resolver = FIELD_FALLBACK_RESOLVERS[field];
+    if (resolver) target = resolver();
+  }
+
+  highlightElement(target);
 }
 
 function labFieldKey(

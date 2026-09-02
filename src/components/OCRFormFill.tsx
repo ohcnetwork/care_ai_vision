@@ -167,7 +167,12 @@ export default function OCRFormFill({
         });
       }
 
-      if (data.permanent_address) {
+      const sameAddress =
+        data.permanent_address &&
+        data.address &&
+        data.permanent_address.trim() === data.address.trim();
+
+      if (data.permanent_address && !sameAddress) {
         steps.push({
           field: "permanent_address",
           apply: () => {
@@ -175,9 +180,17 @@ export default function OCRFormFill({
             setField("permanent_address_same_as_address", false);
           },
         });
-      } else if (data.address) {
-        setField("permanent_address", data.address);
-        setField("permanent_address_same_as_address", true);
+      } else if (data.permanent_address || data.address) {
+        steps.push({
+          field: "permanent_address",
+          apply: () => {
+            setField(
+              "permanent_address",
+              (data.address ?? data.permanent_address)!,
+            );
+            setField("permanent_address_same_as_address", true);
+          },
+        });
       }
 
       const pincode = normalizePincode(data.pincode);
@@ -230,7 +243,7 @@ export default function OCRFormFill({
       steps.forEach((step, index) => {
         const timeoutId = setTimeout(() => {
           step.apply();
-          highlightField(step.field);
+          requestAnimationFrame(() => highlightField(step.field));
           setFilledCount(index + 1);
           if (index === steps.length - 1) {
             form.clearErrors?.();
